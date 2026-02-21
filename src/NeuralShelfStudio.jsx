@@ -85,19 +85,20 @@ export default function NeuralShelfStudio() {
   function tryAdminLogin() {
     setAdminError("");
     fetch("/api/books", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "x-admin-secret": adminInput },
-      body: JSON.stringify({ books }),
+      method: "GET",
+      headers: { "x-admin-secret": adminInput, "x-auth-check": "1" },
     })
       .then(r => {
-        if (r.ok) {
+        if (r.status === 401) {
+          setAdminError("Incorrect secret");
+        } else if (r.ok) {
           sessionStorage.setItem("ns-admin", adminInput);
           setAdminSecret(adminInput);
           setShowAdminLogin(false);
           setAdminInput("");
           isFirstLoad.current = false;
         } else {
-          setAdminError("Incorrect secret");
+          setAdminError("Server error - try again");
         }
       })
       .catch(() => setAdminError("Could not connect"));
