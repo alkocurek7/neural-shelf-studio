@@ -55,9 +55,10 @@ export default function NeuralShelfStudio() {
 
   // Extraction
   const [extracting, setExtracting]       = useState(false);
-  const [extractedTerms, setExtractedTerms] = useState(null); // { A: [...], B: [...] }
+  const [extractedTerms, setExtractedTerms] = useState(null);
+  const [extractedBook, setExtractedBook] = useState(null);
   const [extractError, setExtractError]   = useState(null);
-  const [pendingImage, setPendingImage]   = useState(null); // { dataUrl, mediaType }
+  const [pendingImage, setPendingImage]   = useState(null);
   const saveTimer = useRef(null);
   const isFirstLoad = useRef(true);
 
@@ -179,6 +180,38 @@ export default function NeuralShelfStudio() {
     setEditingNote(false);
   }
 
+  function runExtraction(base64, mediaType) {
+    setExtractedTerms(null);
+    setExtractedBook(null);
+    setExtractError(null);
+    setExtracting(true);
+    fetch("/api/extract", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ imageBase64: base64, mediaType }),
+    })
+      .then(r => r.json())
+      .then(d => {
+        setExtracting(false);
+        if (d.error) { setExtractError(d.error); return; }
+        setExtractedTerms(d.terms || {});
+        setExtractedBook(d.book || null);
+        // If image uploaded to storage, save URL instead of base64
+        if (d.imageUrl) {
+          setBooks(prev => prev.map(b => {
+            if (b.id !== activeBookId) return b;
+            const images = (b.images || []).map(img =>
+              img.dataUrl && img.dataUrl.length > 500 && !img.dataUrl.startsWith("http")
+                ? { ...img, dataUrl: d.imageUrl }
+                : img
+            );
+            return { ...b, images };
+          }));
+        }
+      })
+      .catch(() => { setExtracting(false); setExtractError("Extraction failed"); });
+  }
+
   function handleImageUpload(e) {
     const file = e.target.files[0];
     if (!file) return;
@@ -186,29 +219,14 @@ export default function NeuralShelfStudio() {
     const reader = new FileReader();
     reader.onload = (ev) => {
       const dataUrl = ev.target.result;
-      // Save image to book immediately
+      const base64 = dataUrl.split(",")[1];
+      // Save placeholder image immediately, URL will update after extraction
       const img = { id: Date.now().toString(), dataUrl, letterRange: imgRange || "A-Z", note: imgNote };
       setBooks(prev => prev.map(b => b.id === activeBookId ? { ...b, images: [...(b.images || []), img] } : b));
       setImgRange(""); setImgNote("");
       if (fileRef.current) fileRef.current.value = "";
-      // Trigger extraction
-      const base64 = dataUrl.split(",")[1];
       setPendingImage({ dataUrl, mediaType });
-      setExtractedTerms(null);
-      setExtractError(null);
-      setExtracting(true);
-      fetch("/api/extract", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ imageBase64: base64, mediaType }),
-      })
-        .then(r => r.json())
-        .then(d => {
-          setExtracting(false);
-          if (d.error) { setExtractError(d.error); return; }
-          setExtractedTerms(d.terms || {});
-        })
-        .catch(() => { setExtracting(false); setExtractError("Extraction failed"); });
+      runExtraction(base64, mediaType);
     };
     reader.readAsDataURL(file);
   }
@@ -222,40 +240,36 @@ export default function NeuralShelfStudio() {
       const dataUrl = ev.target.result;
       const base64 = dataUrl.split(",")[1];
       setPendingImage({ dataUrl, mediaType });
-      setExtractedTerms(null);
-      setExtractError(null);
-      setExtracting(true);
-      fetch("/api/extract", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ imageBase64: base64, mediaType }),
-      })
-        .then(r => r.json())
-        .then(d => {
-          setExtracting(false);
-          if (d.error) { setExtractError(d.error); return; }
-          setExtractedTerms(d.terms || {});
-        })
-        .catch(() => { setExtracting(false); setExtractError("Extraction failed"); });
+      runExtraction(base64, mediaType);
     };
     reader.readAsDataURL(file);
+    if (extractRef.current) extractRef.current.value = "";
   }
 
-  function confirmExtractedTerms(selected) {
-    // selected: { A: ["term1", "term2"], B: [...] }
+  function confirmExtractedTerms(selectedTerms, bookMeta) {
+    // Add terms to the right letter buckets
     setBooks(prev => prev.map(b => {
       if (b.id !== activeBookId) return b;
       const letters = { ...b.letters };
-      Object.entries(selected).forEach(([letter, terms]) => {
+      Object.entries(selectedTerms).forEach(([letter, terms]) => {
         if (!terms.length) return;
         if (!letters[letter]) letters[letter] = { words: [] };
         const words = [...letters[letter].words];
         terms.forEach(t => { if (t && !words.includes(t)) words.push(t); });
         letters[letter] = { ...letters[letter], words };
       });
-      return { ...b, letters };
+      // Apply book metadata if provided
+      const updates = { ...b, letters };
+      if (bookMeta) {
+        if (bookMeta.title && !b.title) updates.title = bookMeta.title;
+        if (bookMeta.author && !b.author) updates.author = bookMeta.author;
+        if (bookMeta.dewey && !b.dewey) updates.dewey = bookMeta.dewey;
+        if (bookMeta.tags && bookMeta.tags.length && (!b.tags || !b.tags.length)) updates.tags = bookMeta.tags;
+      }
+      return updates;
     }));
     setExtractedTerms(null);
+    setExtractedBook(null);
     setPendingImage(null);
   }
 
@@ -613,9 +627,10 @@ export default function NeuralShelfStudio() {
             <ExtractionPanel
               extracting={extracting}
               extractedTerms={extractedTerms}
+              extractedBook={extractedBook}
               extractError={extractError}
               onConfirm={confirmExtractedTerms}
-              onDismiss={() => { setExtractedTerms(null); setPendingImage(null); setExtractError(null); }}
+              onDismiss={() => { setExtractedTerms(null); setExtractedBook(null); setPendingImage(null); setExtractError(null); }}
             />
           )}
 
@@ -774,12 +789,12 @@ const S = {
 
 
 // ── Extraction Review Panel ──
-function ExtractionPanel({ extracting, extractedTerms, extractError, onConfirm, onDismiss }) {
+function ExtractionPanel({ extracting, extractedTerms, extractedBook, extractError, onConfirm, onDismiss }) {
   const COLORS = ["#FF6B6B","#FF8C42","#F9C74F","#6BCB77","#4D96FF","#9B5DE5","#FF6B9D","#48CAE4","#F4845F","#90BE6D","#C77DFF","#FFD93D"];
   const LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("");
 
-  // Track which terms are selected (all selected by default)
   const [selected, setSelected] = React.useState({});
+  const [bookMeta, setBookMeta] = React.useState({});
 
   React.useEffect(() => {
     if (extractedTerms) {
@@ -789,34 +804,33 @@ function ExtractionPanel({ extracting, extractedTerms, extractError, onConfirm, 
       });
       setSelected(initial);
     }
-  }, [extractedTerms]);
+    if (extractedBook) {
+      setBookMeta({ ...extractedBook });
+    }
+  }, [extractedTerms, extractedBook]);
 
   function toggleTerm(letter, term) {
     setSelected(prev => {
       const terms = prev[letter] || [];
-      if (terms.includes(term)) {
-        return { ...prev, [letter]: terms.filter(t => t !== term) };
-      } else {
-        return { ...prev, [letter]: [...terms, term] };
-      }
+      return terms.includes(term)
+        ? { ...prev, [letter]: terms.filter(t => t !== term) }
+        : { ...prev, [letter]: [...terms, term] };
     });
+  }
+
+  function toggleBookField(field) {
+    setBookMeta(prev => ({ ...prev, [field]: prev[field] ? null : extractedBook[field] }));
   }
 
   const totalSelected = Object.values(selected).reduce((s, arr) => s + arr.length, 0);
   const letterColor = (letter) => COLORS[LETTERS.indexOf(letter) % COLORS.length];
+  const hasBookMeta = extractedBook && Object.values(extractedBook).some(v => v && (Array.isArray(v) ? v.length : true));
 
   return (
-    <div style={{ ...EP.panel }}>
+    <div style={EP.panel}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
-        <div>
-          <p style={{ ...EP.title }}>✦ Extracted terms</p>
-          {!extracting && extractedTerms && (
-            <p style={{ fontFamily: "'DM Sans', sans-serif", fontSize: 12, color: "#9B5DE5", margin: "2px 0 0 0" }}>
-              {totalSelected} terms selected — click to deselect any you want to skip
-            </p>
-          )}
-        </div>
-        <button onClick={onDismiss} style={{ ...EP.dismissBtn }}>&times;</button>
+        <p style={EP.title}>✦ Claude read your index</p>
+        <button onClick={onDismiss} style={EP.dismissBtn}>&times;</button>
       </div>
 
       {extracting && (
@@ -832,57 +846,88 @@ function ExtractionPanel({ extracting, extractedTerms, extractError, onConfirm, 
         </p>
       )}
 
-      {extractedTerms && Object.keys(extractedTerms).length === 0 && (
-        <p style={{ fontFamily: "'DM Sans', sans-serif", fontSize: 13, color: "#A09890", fontStyle: "italic" }}>
-          No terms could be read from this image. Try a clearer photo.
-        </p>
-      )}
-
-      {extractedTerms && Object.keys(extractedTerms).length > 0 && (
+      {!extracting && extractedTerms && (
         <>
-          <div style={{ display: "flex", flexDirection: "column", gap: 12, marginBottom: 16 }}>
-            {Object.entries(extractedTerms).sort().map(([letter, terms]) => {
-              const lc = letterColor(letter);
-              const selectedTerms = selected[letter] || [];
-              return (
-                <div key={letter}>
-                  <span style={{ fontFamily: "'Source Serif 4', serif", fontSize: 20, fontWeight: 700, color: lc }}>
-                    {letter}
+          {/* Book metadata suggestions */}
+          {hasBookMeta && (
+            <div style={{ marginBottom: 16, padding: "12px 14px", background: "#F3EEFF", borderRadius: 10, border: "1px solid #DDD0FF" }}>
+              <p style={{ ...EP.sectionLabel, color: "#9B5DE5", marginBottom: 10 }}>Book details found — click to deselect</p>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                {extractedBook.title && (
+                  <span onClick={() => toggleBookField("title")} style={{ ...EP.metaPill, opacity: bookMeta.title ? 1 : 0.4, textDecoration: bookMeta.title ? "none" : "line-through" }}>
+                    Title: {extractedBook.title}
                   </span>
-                  <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginTop: 5 }}>
-                    {terms.map(term => {
-                      const isSelected = selectedTerms.includes(term);
-                      return (
-                        <span
-                          key={term}
-                          onClick={() => toggleTerm(letter, term)}
-                          style={{
-                            fontFamily: "'DM Sans', sans-serif", fontSize: 12,
-                            padding: "4px 10px", borderRadius: 18, cursor: "pointer",
-                            background: isSelected ? lc : "transparent",
-                            color: isSelected ? "#FFF" : lc,
-                            border: "1.5px solid " + lc,
-                            opacity: isSelected ? 1 : 0.4,
-                            transition: "all 0.1s",
-                            textDecoration: isSelected ? "none" : "line-through",
-                          }}
-                        >
-                          {term}
-                        </span>
-                      );
-                    })}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
+                )}
+                {extractedBook.author && (
+                  <span onClick={() => toggleBookField("author")} style={{ ...EP.metaPill, opacity: bookMeta.author ? 1 : 0.4, textDecoration: bookMeta.author ? "none" : "line-through" }}>
+                    Author: {extractedBook.author}
+                  </span>
+                )}
+                {extractedBook.dewey && (
+                  <span onClick={() => toggleBookField("dewey")} style={{ ...EP.metaPill, opacity: bookMeta.dewey ? 1 : 0.4, textDecoration: bookMeta.dewey ? "none" : "line-through" }}>
+                    Dewey: {extractedBook.dewey}
+                  </span>
+                )}
+                {(extractedBook.tags || []).map(tag => (
+                  <span key={tag} style={{ ...EP.metaPill, fontSize: 11, opacity: bookMeta.tags ? 1 : 0.4 }}>
+                    #{tag}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Terms */}
+          {Object.keys(extractedTerms).length === 0 ? (
+            <p style={{ fontFamily: "'DM Sans', sans-serif", fontSize: 13, color: "#A09890", fontStyle: "italic", marginBottom: 14 }}>
+              No terms could be read. Try a clearer photo.
+            </p>
+          ) : (
+            <>
+              <p style={{ ...EP.sectionLabel, marginBottom: 10 }}>
+                {totalSelected} terms — click any to deselect
+              </p>
+              <div style={{ display: "flex", flexDirection: "column", gap: 12, marginBottom: 16 }}>
+                {Object.entries(extractedTerms).sort().map(([letter, terms]) => {
+                  const lc = letterColor(letter);
+                  const selectedTerms = selected[letter] || [];
+                  return (
+                    <div key={letter}>
+                      <span style={{ fontFamily: "'Source Serif 4', serif", fontSize: 20, fontWeight: 700, color: lc }}>
+                        {letter}
+                      </span>
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginTop: 5 }}>
+                        {terms.map(term => {
+                          const isSel = selectedTerms.includes(term);
+                          return (
+                            <span key={term} onClick={() => toggleTerm(letter, term)} style={{
+                              fontFamily: "'DM Sans', sans-serif", fontSize: 12,
+                              padding: "4px 10px", borderRadius: 18, cursor: "pointer",
+                              background: isSel ? lc : "transparent",
+                              color: isSel ? "#FFF" : lc,
+                              border: "1.5px solid " + lc,
+                              opacity: isSel ? 1 : 0.4,
+                              transition: "all 0.1s",
+                              textDecoration: isSel ? "none" : "line-through",
+                            }}>
+                              {term}
+                            </span>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </>
+          )}
+
           <div style={{ display: "flex", gap: 8 }}>
             <button
-              onClick={() => onConfirm(selected)}
+              onClick={() => onConfirm(selected, bookMeta)}
               style={{ fontFamily: "'DM Sans', sans-serif", fontSize: 13, fontWeight: 700, color: "#FFF", background: "#9B5DE5", border: "none", borderRadius: 8, padding: "8px 16px", cursor: "pointer" }}
-              disabled={totalSelected === 0}
             >
-              Add {totalSelected} terms
+              {totalSelected > 0 ? `Add ${totalSelected} terms` : "Apply"}
             </button>
             <button onClick={onDismiss} style={{ fontFamily: "'DM Sans', sans-serif", fontSize: 12, fontWeight: 500, color: "#8B8580", background: "transparent", border: "1px solid #E0DCD4", borderRadius: 8, padding: "6px 14px", cursor: "pointer" }}>
               Discard
@@ -903,8 +948,18 @@ const EP = {
     fontFamily: "'DM Sans', sans-serif", fontSize: 13, fontWeight: 700,
     color: "#9B5DE5", textTransform: "uppercase", letterSpacing: "0.06em", margin: 0,
   },
+  sectionLabel: {
+    fontFamily: "'DM Sans', sans-serif", fontSize: 11, fontWeight: 700,
+    color: "#A09890", textTransform: "uppercase", letterSpacing: "0.06em", margin: 0,
+  },
   dismissBtn: {
     background: "transparent", border: "none", fontSize: 20,
     color: "#C0B8A8", cursor: "pointer", lineHeight: 1, padding: 0,
+  },
+  metaPill: {
+    fontFamily: "'DM Sans', sans-serif", fontSize: 12, fontWeight: 500,
+    padding: "4px 11px", borderRadius: 18, cursor: "pointer",
+    background: "#EDE0FF", color: "#7B3FBF",
+    border: "1.5px solid #DDD0FF", transition: "all 0.1s",
   },
 };
