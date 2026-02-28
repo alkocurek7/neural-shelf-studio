@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo, useCallback } from "react";
+import React, { useState, useEffect, useRef, useMemo, useCallback } from "react";
 
 // ── Seed data (your existing indexes) ──
 const SEED_BOOKS = [{"id":"1771615793254","title":"Is that a Fish in your Ear?","author":"David Bellos","dewey":"418","tags":["language"],"letterRange":"A-C","created":"2026-02-20T19:29:53.254Z","letters":{"A":{"words":["abstract thought","alphabet","analogy-based substitutions","animal language","anisomorphism","asymmetrical language regime","axioms"]},"L":{"words":["linguistic behavior"]},"B":{"words":["bilingualism","book reviews","book trade"]},"C":{"words":["category term","code switching","code breakers","color terms","computer aided translation (cat)","concrete languages","conference interpreting","contact language","context","cultural substitution","cuneiform script"]}},"links":[],"images":[]},{"id":"1771610913951","title":"Reader Come Home","author":"Maryanne Wolf","dewey":"418.401","tags":["reading","technology","brain","digital reading"],"letterRange":"A, B, M, N, P","created":"2026-02-20T18:08:33.951Z","letters":{"A":{"words":["analogy + inference","arcia/tl","ai","attention","asd"]},"B":{"words":["biliteracy","books/print media","reading brain"]},"M":{"words":["memory","mirror neurons","morphemes","multitasking","music"]},"N":{"words":["novelty bias"]},"P":{"words":["perspective taking"]}},"links":[{"from":"reading brain","to":"memory"}],"images":[]},{"id":"1771609681946","title":"In Praise of Failure","author":"Costica Bradatan","dewey":"158.1","tags":["failure","philosophy","psychology","humility"],"letterRange":"A-T, Y, S","created":"2026-02-20T17:48:01.946Z","letters":{"A":{"words":["alienation","apokatastasis"]},"C":{"words":["clumsiness","conspiracy theories"]},"D":{"words":["demiurge","democracy","differentiation"]},"F":{"words":["flawlessness"]},"G":{"words":["gandhi"]},"H":{"words":["humility"]},"M":{"words":["meaning"]},"N":{"words":["nihilism","nothingness"]},"P":{"words":["power","predestination"]},"R":{"words":["revolution"]},"S":{"words":["self-assertion","stoicism","storytelling"]},"T":{"words":["transhumanism"]}},"links":[{"from":"democracy","to":"humility"}],"images":[]},{"id":"1771607517277","title":"Visual Thinking","author":"Temple Grandin","dewey":"152.14","tags":["thinking","visual intelligence","neurodivergence"],"letterRange":"A, N, C, E","created":"2026-02-20T17:11:57.277Z","letters":{"A":{"words":["abstract thinking","adhd","ancestors","animal behavior","animal science","animal(s)","apprenticeships","architects","ai","artists","asperger's syndrome","automation","autism","algebra","(associational thinking)"]},"B":{"words":["broca's area","brain (animal)","bees","brain (human)"]},"C":{"words":["career(s)","cattle handling","chess","childhood education","children","cognitive neuroscience","collaborations","complementary minds","computers","creativity","community college","covid-19","career + technical education (cte)"]},"E":{"words":["educational system"]},"V":{"words":["visual thinking"]},"H":{"words":["human-animal relationship","homeschooling","home economics"]},"P":{"words":["people with autism","public schools"]},"N":{"words":["neurodiverse people","neurodiversity"]},"S":{"words":["speech","special education"]},"M":{"words":["mentors"]},"J":{"words":["jobs"]},"I":{"words":["internships"]},"T":{"words":["technology industry","torrence tests of creative thinking (ttct)"]}},"links":[{"from":"abstract thinking","to":"algebra"},{"from":"autism","to":"neurodiversity"},{"from":"children","to":"educational system"},{"from":"career(s)","to":"jobs"},{"from":"jobs","to":"internships"},{"from":"jobs","to":"apprenticeships"},{"from":"visual thinking","to":"(associational thinking)"},{"from":"creativity","to":"torrence tests of creative thinking (ttct)"}],"images":[]}];
@@ -51,6 +51,13 @@ export default function NeuralShelfStudio() {
   const [imgRange, setImgRange] = useState("");
   const [imgNote, setImgNote]   = useState("");
   const fileRef = useRef(null);
+  const extractRef = useRef(null);
+
+  // Extraction
+  const [extracting, setExtracting]       = useState(false);
+  const [extractedTerms, setExtractedTerms] = useState(null); // { A: [...], B: [...] }
+  const [extractError, setExtractError]   = useState(null);
+  const [pendingImage, setPendingImage]   = useState(null); // { dataUrl, mediaType }
   const saveTimer = useRef(null);
   const isFirstLoad = useRef(true);
 
@@ -175,14 +182,81 @@ export default function NeuralShelfStudio() {
   function handleImageUpload(e) {
     const file = e.target.files[0];
     if (!file) return;
+    const mediaType = file.type || "image/jpeg";
     const reader = new FileReader();
     reader.onload = (ev) => {
-      const img = { id: Date.now().toString(), dataUrl: ev.target.result, letterRange: imgRange || "A-Z", note: imgNote };
+      const dataUrl = ev.target.result;
+      // Save image to book immediately
+      const img = { id: Date.now().toString(), dataUrl, letterRange: imgRange || "A-Z", note: imgNote };
       setBooks(prev => prev.map(b => b.id === activeBookId ? { ...b, images: [...(b.images || []), img] } : b));
       setImgRange(""); setImgNote("");
       if (fileRef.current) fileRef.current.value = "";
+      // Trigger extraction
+      const base64 = dataUrl.split(",")[1];
+      setPendingImage({ dataUrl, mediaType });
+      setExtractedTerms(null);
+      setExtractError(null);
+      setExtracting(true);
+      fetch("/api/extract", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ imageBase64: base64, mediaType }),
+      })
+        .then(r => r.json())
+        .then(d => {
+          setExtracting(false);
+          if (d.error) { setExtractError(d.error); return; }
+          setExtractedTerms(d.terms || {});
+        })
+        .catch(() => { setExtracting(false); setExtractError("Extraction failed"); });
     };
     reader.readAsDataURL(file);
+  }
+
+  function handleExtractUpload(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    const mediaType = file.type || "image/jpeg";
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const dataUrl = ev.target.result;
+      const base64 = dataUrl.split(",")[1];
+      setPendingImage({ dataUrl, mediaType });
+      setExtractedTerms(null);
+      setExtractError(null);
+      setExtracting(true);
+      fetch("/api/extract", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ imageBase64: base64, mediaType }),
+      })
+        .then(r => r.json())
+        .then(d => {
+          setExtracting(false);
+          if (d.error) { setExtractError(d.error); return; }
+          setExtractedTerms(d.terms || {});
+        })
+        .catch(() => { setExtracting(false); setExtractError("Extraction failed"); });
+    };
+    reader.readAsDataURL(file);
+  }
+
+  function confirmExtractedTerms(selected) {
+    // selected: { A: ["term1", "term2"], B: [...] }
+    setBooks(prev => prev.map(b => {
+      if (b.id !== activeBookId) return b;
+      const letters = { ...b.letters };
+      Object.entries(selected).forEach(([letter, terms]) => {
+        if (!terms.length) return;
+        if (!letters[letter]) letters[letter] = { words: [] };
+        const words = [...letters[letter].words];
+        terms.forEach(t => { if (t && !words.includes(t)) words.push(t); });
+        letters[letter] = { ...letters[letter], words };
+      });
+      return { ...b, letters };
+    }));
+    setExtractedTerms(null);
+    setPendingImage(null);
   }
 
   function removeImage(imgId) {
@@ -534,6 +608,17 @@ export default function NeuralShelfStudio() {
             </div>
           )}
 
+          {/* Extraction review panel */}
+          {isAdmin && (extracting || extractedTerms || extractError) && (
+            <ExtractionPanel
+              extracting={extracting}
+              extractedTerms={extractedTerms}
+              extractError={extractError}
+              onConfirm={confirmExtractedTerms}
+              onDismiss={() => { setExtractedTerms(null); setPendingImage(null); setExtractError(null); }}
+            />
+          )}
+
           {/* Images */}
           <div style={S.card}>
             <p style={{ ...S.label, marginBottom: 12 }}>Index images</p>
@@ -545,6 +630,10 @@ export default function NeuralShelfStudio() {
                   value={imgNote} onChange={e => setImgNote(e.target.value)} />
                 <button onClick={() => fileRef.current && fileRef.current.click()} style={S.ghostBtn}>Upload image</button>
                 <input ref={fileRef} type="file" accept="image/*" style={{ display: "none" }} onChange={handleImageUpload} />
+                <button onClick={() => extractRef.current && extractRef.current.click()} style={{ ...S.ghostBtn, color: "#9B5DE5", borderColor: "#9B5DE5" }}>
+                  {extracting ? "Reading..." : "✦ Extract terms"}
+                </button>
+                <input ref={extractRef} type="file" accept="image/*" style={{ display: "none" }} onChange={handleExtractUpload} />
               </div>
             )}
             {bookImages.length === 0 && (
@@ -681,4 +770,141 @@ const S = {
   bookAuthor: { fontFamily: "'DM Sans', sans-serif", fontSize: 12, color: "#A09890", marginTop: 2 },
   tagPill: { fontFamily: "'DM Sans', sans-serif", fontSize: 11, fontWeight: 500, padding: "2px 9px", borderRadius: 12, border: "1.5px solid", background: "transparent" },
   stat: { fontFamily: "'DM Sans', sans-serif", fontSize: 11, color: "#C0B8A8" },
+};
+
+
+// ── Extraction Review Panel ──
+function ExtractionPanel({ extracting, extractedTerms, extractError, onConfirm, onDismiss }) {
+  const COLORS = ["#FF6B6B","#FF8C42","#F9C74F","#6BCB77","#4D96FF","#9B5DE5","#FF6B9D","#48CAE4","#F4845F","#90BE6D","#C77DFF","#FFD93D"];
+  const LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("");
+
+  // Track which terms are selected (all selected by default)
+  const [selected, setSelected] = React.useState({});
+
+  React.useEffect(() => {
+    if (extractedTerms) {
+      const initial = {};
+      Object.entries(extractedTerms).forEach(([letter, terms]) => {
+        initial[letter] = [...terms];
+      });
+      setSelected(initial);
+    }
+  }, [extractedTerms]);
+
+  function toggleTerm(letter, term) {
+    setSelected(prev => {
+      const terms = prev[letter] || [];
+      if (terms.includes(term)) {
+        return { ...prev, [letter]: terms.filter(t => t !== term) };
+      } else {
+        return { ...prev, [letter]: [...terms, term] };
+      }
+    });
+  }
+
+  const totalSelected = Object.values(selected).reduce((s, arr) => s + arr.length, 0);
+  const letterColor = (letter) => COLORS[LETTERS.indexOf(letter) % COLORS.length];
+
+  return (
+    <div style={{ ...EP.panel }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+        <div>
+          <p style={{ ...EP.title }}>✦ Extracted terms</p>
+          {!extracting && extractedTerms && (
+            <p style={{ fontFamily: "'DM Sans', sans-serif", fontSize: 12, color: "#9B5DE5", margin: "2px 0 0 0" }}>
+              {totalSelected} terms selected — click to deselect any you want to skip
+            </p>
+          )}
+        </div>
+        <button onClick={onDismiss} style={{ ...EP.dismissBtn }}>&times;</button>
+      </div>
+
+      {extracting && (
+        <div style={{ textAlign: "center", padding: "20px 0" }}>
+          <div style={{ fontSize: 24, marginBottom: 8 }}>👁</div>
+          <p style={{ fontFamily: "'DM Sans', sans-serif", fontSize: 13, color: "#9B5DE5" }}>Reading your index...</p>
+        </div>
+      )}
+
+      {extractError && (
+        <p style={{ fontFamily: "'DM Sans', sans-serif", fontSize: 13, color: "#FF6B6B" }}>
+          Could not read image: {extractError}
+        </p>
+      )}
+
+      {extractedTerms && Object.keys(extractedTerms).length === 0 && (
+        <p style={{ fontFamily: "'DM Sans', sans-serif", fontSize: 13, color: "#A09890", fontStyle: "italic" }}>
+          No terms could be read from this image. Try a clearer photo.
+        </p>
+      )}
+
+      {extractedTerms && Object.keys(extractedTerms).length > 0 && (
+        <>
+          <div style={{ display: "flex", flexDirection: "column", gap: 12, marginBottom: 16 }}>
+            {Object.entries(extractedTerms).sort().map(([letter, terms]) => {
+              const lc = letterColor(letter);
+              const selectedTerms = selected[letter] || [];
+              return (
+                <div key={letter}>
+                  <span style={{ fontFamily: "'Source Serif 4', serif", fontSize: 20, fontWeight: 700, color: lc }}>
+                    {letter}
+                  </span>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginTop: 5 }}>
+                    {terms.map(term => {
+                      const isSelected = selectedTerms.includes(term);
+                      return (
+                        <span
+                          key={term}
+                          onClick={() => toggleTerm(letter, term)}
+                          style={{
+                            fontFamily: "'DM Sans', sans-serif", fontSize: 12,
+                            padding: "4px 10px", borderRadius: 18, cursor: "pointer",
+                            background: isSelected ? lc : "transparent",
+                            color: isSelected ? "#FFF" : lc,
+                            border: "1.5px solid " + lc,
+                            opacity: isSelected ? 1 : 0.4,
+                            transition: "all 0.1s",
+                            textDecoration: isSelected ? "none" : "line-through",
+                          }}
+                        >
+                          {term}
+                        </span>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button
+              onClick={() => onConfirm(selected)}
+              style={{ fontFamily: "'DM Sans', sans-serif", fontSize: 13, fontWeight: 700, color: "#FFF", background: "#9B5DE5", border: "none", borderRadius: 8, padding: "8px 16px", cursor: "pointer" }}
+              disabled={totalSelected === 0}
+            >
+              Add {totalSelected} terms
+            </button>
+            <button onClick={onDismiss} style={{ fontFamily: "'DM Sans', sans-serif", fontSize: 12, fontWeight: 500, color: "#8B8580", background: "transparent", border: "1px solid #E0DCD4", borderRadius: 8, padding: "6px 14px", cursor: "pointer" }}>
+              Discard
+            </button>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+const EP = {
+  panel: {
+    background: "#FAF7FF", border: "2px solid #9B5DE5",
+    borderRadius: 12, padding: "16px 18px", marginBottom: 12,
+  },
+  title: {
+    fontFamily: "'DM Sans', sans-serif", fontSize: 13, fontWeight: 700,
+    color: "#9B5DE5", textTransform: "uppercase", letterSpacing: "0.06em", margin: 0,
+  },
+  dismissBtn: {
+    background: "transparent", border: "none", fontSize: 20,
+    color: "#C0B8A8", cursor: "pointer", lineHeight: 1, padding: 0,
+  },
 };
