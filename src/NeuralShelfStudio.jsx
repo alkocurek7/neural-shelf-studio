@@ -1,965 +1,682 @@
-import React, { useState, useEffect, useRef, useMemo, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 
-// ── Seed data (your existing indexes) ──
-const SEED_BOOKS = [{"id":"1771615793254","title":"Is that a Fish in your Ear?","author":"David Bellos","dewey":"418","tags":["language"],"letterRange":"A-C","created":"2026-02-20T19:29:53.254Z","letters":{"A":{"words":["abstract thought","alphabet","analogy-based substitutions","animal language","anisomorphism","asymmetrical language regime","axioms"]},"L":{"words":["linguistic behavior"]},"B":{"words":["bilingualism","book reviews","book trade"]},"C":{"words":["category term","code switching","code breakers","color terms","computer aided translation (cat)","concrete languages","conference interpreting","contact language","context","cultural substitution","cuneiform script"]}},"links":[],"images":[]},{"id":"1771610913951","title":"Reader Come Home","author":"Maryanne Wolf","dewey":"418.401","tags":["reading","technology","brain","digital reading"],"letterRange":"A, B, M, N, P","created":"2026-02-20T18:08:33.951Z","letters":{"A":{"words":["analogy + inference","arcia/tl","ai","attention","asd"]},"B":{"words":["biliteracy","books/print media","reading brain"]},"M":{"words":["memory","mirror neurons","morphemes","multitasking","music"]},"N":{"words":["novelty bias"]},"P":{"words":["perspective taking"]}},"links":[{"from":"reading brain","to":"memory"}],"images":[]},{"id":"1771609681946","title":"In Praise of Failure","author":"Costica Bradatan","dewey":"158.1","tags":["failure","philosophy","psychology","humility"],"letterRange":"A-T, Y, S","created":"2026-02-20T17:48:01.946Z","letters":{"A":{"words":["alienation","apokatastasis"]},"C":{"words":["clumsiness","conspiracy theories"]},"D":{"words":["demiurge","democracy","differentiation"]},"F":{"words":["flawlessness"]},"G":{"words":["gandhi"]},"H":{"words":["humility"]},"M":{"words":["meaning"]},"N":{"words":["nihilism","nothingness"]},"P":{"words":["power","predestination"]},"R":{"words":["revolution"]},"S":{"words":["self-assertion","stoicism","storytelling"]},"T":{"words":["transhumanism"]}},"links":[{"from":"democracy","to":"humility"}],"images":[]},{"id":"1771607517277","title":"Visual Thinking","author":"Temple Grandin","dewey":"152.14","tags":["thinking","visual intelligence","neurodivergence"],"letterRange":"A, N, C, E","created":"2026-02-20T17:11:57.277Z","letters":{"A":{"words":["abstract thinking","adhd","ancestors","animal behavior","animal science","animal(s)","apprenticeships","architects","ai","artists","asperger's syndrome","automation","autism","algebra","(associational thinking)"]},"B":{"words":["broca's area","brain (animal)","bees","brain (human)"]},"C":{"words":["career(s)","cattle handling","chess","childhood education","children","cognitive neuroscience","collaborations","complementary minds","computers","creativity","community college","covid-19","career + technical education (cte)"]},"E":{"words":["educational system"]},"V":{"words":["visual thinking"]},"H":{"words":["human-animal relationship","homeschooling","home economics"]},"P":{"words":["people with autism","public schools"]},"N":{"words":["neurodiverse people","neurodiversity"]},"S":{"words":["speech","special education"]},"M":{"words":["mentors"]},"J":{"words":["jobs"]},"I":{"words":["internships"]},"T":{"words":["technology industry","torrence tests of creative thinking (ttct)"]}},"links":[{"from":"abstract thinking","to":"algebra"},{"from":"autism","to":"neurodiversity"},{"from":"children","to":"educational system"},{"from":"career(s)","to":"jobs"},{"from":"jobs","to":"internships"},{"from":"jobs","to":"apprenticeships"},{"from":"visual thinking","to":"(associational thinking)"},{"from":"creativity","to":"torrence tests of creative thinking (ttct)"}],"images":[]}];
-
-// ── Constants ──
-const LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("");
-const COLORS = ["#FF6B6B","#FF8C42","#F9C74F","#6BCB77","#4D96FF","#9B5DE5","#FF6B9D","#48CAE4","#F4845F","#90BE6D","#C77DFF","#FFD93D"];
-
-function deweyColor(dewey) {
-  const d = String(dewey || "").trim()[0];
-  return {"0":"#4D96FF","1":"#9B5DE5","2":"#F4845F","3":"#FF6B9D","4":"#48CAE4","5":"#6BCB77","6":"#FF8C42","7":"#FFD93D","8":"#FF6B6B","9":"#90BE6D"}[d] || "#A09890";
-}
-
-function wordColor(word) {
-  let h = 0;
-  for (let i = 0; i < word.length; i++) h = (h * 31 + word.charCodeAt(i)) % COLORS.length;
-  return COLORS[h];
-}
-
-// ── Main Component ──
-export default function NeuralShelfStudio() {
-  const [books, setBooks]               = useState([]);
-  const [loading, setLoading]           = useState(true);
-  const [saving, setSaving]             = useState(false);
-  const [saveError, setSaveError]       = useState(null);
-  const [view, setView]                 = useState("library");
-  const [activeBookId, setActiveBookId] = useState(null);
-  const [activeLetter, setActiveLetter] = useState(null);
-  const [wordInput, setWordInput]       = useState("");
-  const [searchQuery, setSearchQuery]   = useState("");
-
-  // Admin
-  const [adminSecret, setAdminSecret]     = useState(() => sessionStorage.getItem("ns-admin") || "");
-  const [showAdminLogin, setShowAdminLogin] = useState(false);
-  const [adminInput, setAdminInput]       = useState("");
-  const [adminError, setAdminError]       = useState("");
-  const isAdmin = adminSecret !== "";
-
-  // Add/edit form
-  const [newTitle, setNewTitle]   = useState("");
-  const [newAuthor, setNewAuthor] = useState("");
-  const [newDewey, setNewDewey]   = useState("");
-  const [newTags, setNewTags]     = useState("");
-
-  // Session note
-  const [editingNote, setEditingNote] = useState(false);
-  const [noteInput, setNoteInput]     = useState("");
-
-  // Image upload
-  const [imgRange, setImgRange] = useState("");
-  const [imgNote, setImgNote]   = useState("");
-  const fileRef = useRef(null);
-  const extractRef = useRef(null);
-
-  // Extraction
-  const [extracting, setExtracting]       = useState(false);
-  const [extractedTerms, setExtractedTerms] = useState(null);
-  const [extractedBook, setExtractedBook] = useState(null);
-  const [extractError, setExtractError]   = useState(null);
-  const [pendingImage, setPendingImage]   = useState(null);
-  const saveTimer = useRef(null);
-  const isFirstLoad = useRef(true);
-
-  // ── Load books from API ──
-  useEffect(() => {
-    fetch("/api/books")
-      .then(r => r.json())
-      .then(({ books: b }) => { setBooks(b || []); setLoading(false); })
-      .catch(() => setLoading(false));
-  }, []);
-
-  // ── Auto-save when admin and books change ──
-  useEffect(() => {
-    if (!isAdmin || loading) return;
-    if (isFirstLoad.current) { isFirstLoad.current = false; return; }
-    clearTimeout(saveTimer.current);
-    saveTimer.current = setTimeout(() => {
-      setSaving(true);
-      setSaveError(null);
-      fetch("/api/books", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "x-admin-secret": adminSecret },
-        body: JSON.stringify({ books }),
-      })
-        .then(r => r.json())
-        .then(d => { setSaving(false); if (d.error) setSaveError(d.error); })
-        .catch(() => { setSaving(false); setSaveError("Save failed"); });
-    }, 1500);
-  }, [books, isAdmin, loading]);
-
-  // ── Admin login ──
-  function tryAdminLogin() {
-    setAdminError("");
-    fetch("/api/books", {
-      method: "GET",
-      headers: { "x-admin-secret": adminInput, "x-auth-check": "1" },
-    })
-      .then(r => {
-        if (r.status === 401) {
-          setAdminError("Incorrect secret");
-        } else if (r.ok) {
-          sessionStorage.setItem("ns-admin", adminInput);
-          setAdminSecret(adminInput);
-          setShowAdminLogin(false);
-          setAdminInput("");
-          isFirstLoad.current = false;
-        } else {
-          setAdminError("Server error - try again");
-        }
-      })
-      .catch(() => setAdminError("Could not connect"));
+const RAINBOW = ["#e8443a","#e87c3a","#d4a843","#5ab07a","#3a8fd4","#6f5bd4","#b05aa0","#d45a8f","#4abcb0","#8b6d4f"];
+const C = {
+  bg:"#faf8f5", surface:"#ffffff", text:"#1a1615", muted:"#7a7068",
+  border:"#ece7e1", accent:"#3a8fd4", warm:"#f5f1ec", err:"#8C3A1A", errBg:"#FFE5D9",
+  tags:{
+    pink:{bg:"#FFD6E0",text:"#8C3050",border:"#FFB3C6",glow:"#FFB3C640"},
+    coral:{bg:"#FFE5D9",text:"#8C3A1A",border:"#FFCAB8",glow:"#FFCAB840"},
+    yellow:{bg:"#FFF3C4",text:"#6B5000",border:"#FFE060",glow:"#FFE06040"},
+    mint:{bg:"#D4F5E9",text:"#1A6040",border:"#90E0BF",glow:"#90E0BF40"},
+    sky:{bg:"#D6EEFF",text:"#1A4870",border:"#90C8FF",glow:"#90C8FF40"},
+    lavender:{bg:"#EAE0FF",text:"#4A308A",border:"#C4AAFF",glow:"#C4AAFF40"},
+    teal:{bg:"#C8F0EE",text:"#1A5F5D",border:"#80D8D4",glow:"#80D8D440"},
+    peach:{bg:"#FFE8D0",text:"#7A3A10",border:"#FFBF88",glow:"#FFBF8840"},
+    sage:{bg:"#DDF0D4",text:"#286010",border:"#A8D898",glow:"#A8D89840"},
+    rose:{bg:"#FFD9E8",text:"#7A1040",border:"#FFB0CF",glow:"#FFB0CF40"},
   }
+};
+const CK = Object.keys(C.tags);
+const tc = (color) => C.tags[color] || C.tags.sky;
+const wordCount = (s) => s.trim().split(/\s+/).filter(Boolean).length;
 
-  function adminLogout() {
-    sessionStorage.removeItem("ns-admin");
-    setAdminSecret("");
-  }
+/* ── Prompts (updated: compress don't abstract + source_snippets) ── */
+const SYS = `You are a cognitive pattern analyst for the Neural Shelf methodology. Extract recurring cognitive and emotional patterns from text.
+Respond ONLY with valid JSON. No markdown, no backticks, no preamble.
+{"title":"short title","subtitle":"brief context","description":"one sentence telling user what to click first","nodes":[{"id":1,"label":"2-4 word lowercase","color":"pink","x":50,"y":30,"weight":3,"sessions":3,"source_snippets":["exact short phrase from the text that anchored this pattern","another phrase"]}],"connections":[[1,2]],"insight":"one non-obvious pattern sentence"}
 
-  // ── Import seed data ──
-  function importSeedData() {
-    setBooks(SEED_BOOKS);
-    isFirstLoad.current = false;
-  }
+LABELING RULE — compress, don't abstract:
+- GOOD: "I don't trust my voice" — compressed from the person's own words
+- BAD: "epistemic uncertainty" — abstracted into clinical language
+- GOOD: "stuck between options" — how they said it
+- BAD: "decision paralysis" — how a therapist would say it
+Always use the person's actual phrasing, shortened. Never replace their words with professional terminology.
 
-  const activeBook = books.find(b => b.id === activeBookId) || null;
+Rules: 6-14 nodes. x/y 10-90 spread out. weight 1-5. 8-20 connections. source_snippets: 1-3 short exact phrases from the input that anchored this pattern.`;
 
-  // ── Book actions ──
-  function addBook() {
-    if (!newTitle.trim()) return;
-    const book = {
-      id: Date.now().toString(),
-      title: newTitle.trim(), author: newAuthor.trim(),
-      dewey: newDewey.trim(),
-      tags: newTags.split(",").map(t => t.trim()).filter(Boolean),
-      sessionNote: "", created: new Date().toISOString(),
-      letters: {}, images: [], links: [],
-    };
-    setBooks(prev => [book, ...prev]);
-    setNewTitle(""); setNewAuthor(""); setNewDewey(""); setNewTags("");
-    setActiveBookId(book.id); setView("book"); setActiveLetter(null); setEditingNote(false);
-  }
+const MERGE_SYS = `You have an EXISTING cognitive map and NEW text. Analyze what's new, what strengthened, and what shifted.
+Respond ONLY with valid JSON. No markdown, no backticks, no preamble.
+{"updated_nodes":[{"id":1,"label":"name","color":"pink","x":50,"y":30,"weight":3,"sessions":5,"is_new":false,"shift":"strengthened","source_snippets":["phrase from new text"]}],"connections":[[1,2]],"insight":"what changed","changelog":"specific: added N patterns, strengthened X"}
 
-  function toggleLetter(letter) {
-    setActiveLetter(prev => prev === letter ? null : letter);
-    setWordInput("");
-  }
+LABELING RULE — compress, don't abstract. Use the person's actual phrasing, shortened. Never replace their words with professional terminology.
 
-  function addWord() {
-    if (!activeBook || !activeLetter || !wordInput.trim()) return;
-    setBooks(prev => prev.map(b => {
-      if (b.id !== activeBookId) return b;
-      const letters = { ...b.letters };
-      if (!letters[activeLetter]) letters[activeLetter] = { words: [] };
-      const words = [...letters[activeLetter].words];
-      wordInput.split(",").forEach(w => {
-        const t = w.trim().toLowerCase();
-        if (t && !words.includes(t)) words.push(t);
-      });
-      letters[activeLetter] = { ...letters[activeLetter], words };
-      return { ...b, letters };
-    }));
-    setWordInput("");
-  }
+shift field must be one of: "new" (didn't exist before), "strengthened" (appeared again, increase weight/sessions), "stable" (unchanged), "faded" (was strong before but absent from new text — decrease weight by 1).
+Keep existing IDs when strengthening. New nodes get IDs after highest existing. Preserve+add connections.`;
 
-  function removeWord(letter, word) {
-    setBooks(prev => prev.map(b => {
-      if (b.id !== activeBookId) return b;
-      const letters = { ...b.letters };
-      if (!letters[letter]) return b;
-      const words = letters[letter].words.filter(w => w !== word);
-      if (words.length === 0) delete letters[letter];
-      else letters[letter] = { ...letters[letter], words };
-      return { ...b, letters };
-    }));
-  }
+const COMBINE_SYS = `You have TWO cognitive maps to merge. Overlap merges, unique stays, new cross-connections form.
+Respond ONLY with valid JSON. No markdown, no backticks, no preamble.
+{"title":"combined title","subtitle":"context","description":"what to click first","updated_nodes":[{"id":1,"label":"name","color":"pink","x":50,"y":30,"weight":3,"sessions":5,"from_map":"a or b or both","source_snippets":[]}],"connections":[[1,2]],"insight":"what emerges","changelog":"what merged"}
+LABELING RULE — compress, don't abstract. Merge similar patterns into single stronger nodes. Create NEW connections between maps.`;
 
-  function saveNote() {
-    setBooks(prev => prev.map(b => b.id === activeBookId ? { ...b, sessionNote: noteInput } : b));
-    setEditingNote(false);
-  }
+const STRUCTURE_SYS = `You are building structured output from a cognitive pattern map. Respond ONLY with valid JSON. No markdown, no backticks, no preamble.`;
 
-  function runExtraction(base64, mediaType) {
-    setExtractedTerms(null);
-    setExtractedBook(null);
-    setExtractError(null);
-    setExtracting(true);
-    fetch("/api/extract", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ imageBase64: base64, mediaType }),
-    })
-      .then(r => r.json())
-      .then(d => {
-        setExtracting(false);
-        if (d.error) { setExtractError(d.error); return; }
-        setExtractedTerms(d.terms || {});
-        setExtractedBook(d.book || null);
-        // If image uploaded to storage, save URL instead of base64
-        if (d.imageUrl) {
-          setBooks(prev => prev.map(b => {
-            if (b.id !== activeBookId) return b;
-            const images = (b.images || []).map(img =>
-              img.dataUrl && img.dataUrl.length > 500 && !img.dataUrl.startsWith("http")
-                ? { ...img, dataUrl: d.imageUrl }
-                : img
-            );
-            return { ...b, images };
-          }));
-        }
-      })
-      .catch(() => { setExtracting(false); setExtractError("Extraction failed"); });
-  }
+const NARRATIVE_PROMPT = `Given this cognitive map, write a 2-3 paragraph narrative summary in second person ("You keep returning to..."). Describe the major patterns, key connections, and any tensions or growth edges. Warm, clear prose — not clinical, not vague.
+Respond with JSON: {"narrative":"the full 2-3 paragraph text"}`;
 
-  function handleImageUpload(e) {
-    const file = e.target.files[0];
-    if (!file) return;
-    const mediaType = file.type || "image/jpeg";
-    const reader = new FileReader();
-    reader.onload = (ev) => {
-      const dataUrl = ev.target.result;
-      const base64 = dataUrl.split(",")[1];
-      // Save placeholder image immediately, URL will update after extraction
-      const img = { id: Date.now().toString(), dataUrl, letterRange: imgRange || "A-Z", note: imgNote };
-      setBooks(prev => prev.map(b => b.id === activeBookId ? { ...b, images: [...(b.images || []), img] } : b));
-      setImgRange(""); setImgNote("");
-      if (fileRef.current) fileRef.current.value = "";
-      setPendingImage({ dataUrl, mediaType });
-      runExtraction(base64, mediaType);
-    };
-    reader.readAsDataURL(file);
-  }
+/* ── Demos ── */
+const DEMOS = [
+  { id:"demo-a",label:"Alexis's Map",subtitle:"14 months of AI conversations",
+    description:"Click any tag to see what it connects to. Size = how often it appeared.",
+    nodes:[{id:1,label:"autonomy",color:"mint",x:48,y:20,sessions:12},{id:2,label:"voice recovery",color:"coral",x:72,y:16,sessions:18},{id:3,label:"index mining",color:"teal",x:28,y:38,sessions:10},{id:4,label:"threshold moment",color:"yellow",x:57,y:36,sessions:22},{id:5,label:"fear of visibility",color:"rose",x:80,y:40,sessions:8},{id:6,label:"self-trust building",color:"mint",x:43,y:56,sessions:14},{id:7,label:"methodology building",color:"lavender",x:18,y:60,sessions:11},{id:8,label:"epistemic safety",color:"sky",x:63,y:60,sessions:7},{id:9,label:"play as process",color:"pink",x:83,y:58,sessions:5},{id:10,label:"curiosity spike",color:"peach",x:34,y:76,sessions:9},{id:11,label:"cognitive shift",color:"lavender",x:56,y:78,sessions:16},{id:12,label:"library as anchor",color:"teal",x:20,y:82,sessions:6},{id:13,label:"recombination",color:"sage",x:75,y:76,sessions:5},{id:14,label:"non-linear learning",color:"sky",x:40,y:88,sessions:10}],
+    connections:[[1,6],[1,3],[2,5],[2,4],[4,6],[4,11],[6,8],[7,3],[7,12],[11,13],[10,14],[8,9],[5,9],[2,11]],
+    timeline:[{date:"Oct 2024",label:"started documenting",color:"#FFE060"},{date:"Jan 2025",label:"first threshold moment",color:"#90E0BF"},{date:"May 2025",label:"voice came back",color:"#FFCAB8"},{date:"Oct 2025",label:"methodology named",color:"#C4AAFF"},{date:"Mar 2026",label:"Neural Shelf launched",color:"#FFB3C6"}],
+    sources:["1,300+ sessions"]},
+  { id:"demo-b",label:"A Reader's Map",subtitle:"6 months of book conversations",
+    description:"Click 'meaning-making' — notice how it connects to almost everything.",
+    nodes:[{id:1,label:"meaning-making",color:"yellow",x:50,y:30,sessions:20},{id:2,label:"slow reading",color:"teal",x:22,y:22,sessions:7},{id:3,label:"annotation habit",color:"mint",x:75,y:20,sessions:5},{id:4,label:"author voice",color:"lavender",x:80,y:46,sessions:11},{id:5,label:"losing my own view",color:"rose",x:24,y:50,sessions:15},{id:6,label:"rereading urge",color:"peach",x:62,y:56,sessions:6},{id:7,label:"fiction vs nonfiction",color:"sky",x:16,y:68,sessions:5},{id:8,label:"reading as escape",color:"coral",x:42,y:72,sessions:10},{id:9,label:"book as mirror",color:"pink",x:68,y:72,sessions:13},{id:10,label:"knowledge gaps",color:"sage",x:84,y:62,sessions:8},{id:11,label:"curiosity fatigue",color:"rose",x:34,y:84,sessions:5},{id:12,label:"synthesis urge",color:"lavender",x:62,y:84,sessions:9}],
+    connections:[[1,5],[1,9],[1,4],[1,6],[2,5],[3,4],[4,9],[5,8],[6,9],[7,8],[8,11],[9,12],[10,12],[10,1]],sources:["Book transcripts"]},
+  { id:"demo-c",label:"First Session",subtitle:"After just 1 upload",
+    description:"Sparse but already honest. Every map starts here. ✦ = user-named tag.",
+    nodes:[{id:1,label:"uncertainty about AI",color:"rose",x:40,y:26,sessions:1},{id:2,label:"wanting to understand",color:"sky",x:68,y:24,sessions:1},{id:3,label:"first question",color:"yellow",x:53,y:48,sessions:1},{id:4,label:"surprise at response",color:"mint",x:26,y:56,sessions:1},{id:5,label:"I named this one",color:"peach",x:72,y:58,sessions:1,userAdded:true},{id:6,label:"something shifted",color:"lavender",x:47,y:74,sessions:1}],
+    connections:[[1,3],[2,3],[3,4],[3,6],[4,6]],sources:["Single upload"]}
+];
 
-  function handleExtractUpload(e) {
-    const file = e.target.files[0];
-    if (!file) return;
-    const mediaType = file.type || "image/jpeg";
-    const reader = new FileReader();
-    reader.onload = (ev) => {
-      const dataUrl = ev.target.result;
-      const base64 = dataUrl.split(",")[1];
-      setPendingImage({ dataUrl, mediaType });
-      runExtraction(base64, mediaType);
-    };
-    reader.readAsDataURL(file);
-    if (extractRef.current) extractRef.current.value = "";
-  }
-
-  function confirmExtractedTerms(selectedTerms, bookMeta) {
-    // Add terms to the right letter buckets
-    setBooks(prev => prev.map(b => {
-      if (b.id !== activeBookId) return b;
-      const letters = { ...b.letters };
-      Object.entries(selectedTerms).forEach(([letter, terms]) => {
-        if (!terms.length) return;
-        if (!letters[letter]) letters[letter] = { words: [] };
-        const words = [...letters[letter].words];
-        terms.forEach(t => { if (t && !words.includes(t)) words.push(t); });
-        letters[letter] = { ...letters[letter], words };
-      });
-      // Apply book metadata if provided
-      const updates = { ...b, letters };
-      if (bookMeta) {
-        if (bookMeta.title && !b.title) updates.title = bookMeta.title;
-        if (bookMeta.author && !b.author) updates.author = bookMeta.author;
-        if (bookMeta.dewey && !b.dewey) updates.dewey = bookMeta.dewey;
-        if (bookMeta.tags && bookMeta.tags.length && (!b.tags || !b.tags.length)) updates.tags = bookMeta.tags;
-      }
-      return updates;
-    }));
-    setExtractedTerms(null);
-    setExtractedBook(null);
-    setPendingImage(null);
-  }
-
-  function removeImage(imgId) {
-    setBooks(prev => prev.map(b => b.id === activeBookId ? { ...b, images: (b.images || []).filter(i => i.id !== imgId) } : b));
-  }
-
-  function deleteBook(id) {
-    setBooks(prev => prev.filter(b => b.id !== id));
-    if (activeBookId === id) { setView("library"); setActiveBookId(null); setActiveLetter(null); }
-  }
-
-  // ── Patterns ──
-  const patterns = useMemo(() => {
-    const wordMap = {};
-    books.forEach(b => Object.entries(b.letters || {}).forEach(([letter, data]) => {
-      (data.words || []).forEach(word => {
-        if (!wordMap[word]) wordMap[word] = [];
-        wordMap[word].push({ bookId: b.id, bookTitle: b.title, letter });
-      });
-    }));
-    const crossBook = Object.entries(wordMap)
-      .filter(([_, a]) => new Set(a.map(x => x.bookId)).size >= 2)
-      .sort((a, b) => new Set(b[1].map(x => x.bookId)).size - new Set(a[1].map(x => x.bookId)).size);
-    const allWords = Object.entries(wordMap).sort((a, b) => b[1].length - a[1].length);
-    return { crossBook, allWords, totalWords: Object.keys(wordMap).length };
-  }, [books]);
-
-  const bookStats = useCallback((book) => {
-    const lk = Object.keys(book.letters || {});
-    return { letters: lk.length, words: lk.reduce((s, l) => s + (book.letters[l].words?.length || 0), 0) };
-  }, []);
-
-  const filteredBooks = searchQuery
-    ? books.filter(b =>
-        b.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        (b.author || "").toLowerCase().includes(searchQuery.toLowerCase()) ||
-        (b.tags || []).some(t => t.toLowerCase().includes(searchQuery.toLowerCase()))
-      )
-    : books;
-
-  // Derived
-  const bookColor = activeBook ? deweyColor(activeBook.dewey) : "#A09890";
-  const bookImages = activeBook ? (activeBook.images || []) : [];
-  const bookLetterEntries = activeBook ? Object.entries(activeBook.letters || {}).sort() : [];
-  const activeLetterColor = activeLetter ? COLORS[LETTERS.indexOf(activeLetter) % COLORS.length] : "#A09890";
-  const activeWords = (activeBook && activeLetter) ? (activeBook.letters[activeLetter]?.words || []) : [];
-
-  if (loading) return (
-    <div style={{ ...S.root, display: "flex", alignItems: "center", justifyContent: "center" }}>
-      <span style={S.muted}>Loading your shelf...</span>
-    </div>
-  );
-
-  return (
-    <div style={S.root}>
-      <link href="https://fonts.googleapis.com/css2?family=Source+Serif+4:wght@400;500;600;700&family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
-      <div style={{ height: 4, background: "linear-gradient(90deg, #FF6B6B, #FF8C42, #F9C74F, #6BCB77, #4D96FF, #9B5DE5, #FF6B9D, #48CAE4, #C77DFF, #FFD93D)" }} />
-
-      {/* ── HEADER ── */}
-      <div style={S.header}>
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <h1 style={S.logo} onClick={() => { setView("library"); setActiveBookId(null); setActiveLetter(null); }}>
-            Neural Shelf
-          </h1>
-          <span style={S.logoSub}>indexing studio</span>
-        </div>
-        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-          {saving && <span style={{ ...S.muted, fontSize: 11 }}>saving...</span>}
-          {saveError && <span style={{ fontSize: 11, color: "#FF6B6B" }}>save failed</span>}
-          {view !== "patterns" && books.length > 0 && (
-            <button onClick={() => setView("patterns")} style={S.ghostBtn}>Patterns</button>
-          )}
-          {view !== "library" && (
-            <button onClick={() => { setView("library"); setActiveBookId(null); setActiveLetter(null); }} style={S.ghostBtn}>Library</button>
-          )}
-          {isAdmin && (
-            <button onClick={() => setView("add")} style={S.primaryBtn}>+ Add Book</button>
-          )}
-          <button
-            onClick={() => isAdmin ? adminLogout() : setShowAdminLogin(true)}
-            style={{ ...S.ghostBtn, padding: "6px 10px", fontSize: 14 }}
-            title={isAdmin ? "Exit edit mode" : "Edit mode"}
-          >
-            {isAdmin ? "🔓" : "🔒"}
-          </button>
-        </div>
-      </div>
-
-      {/* ── ADMIN LOGIN MODAL ── */}
-      {showAdminLogin && (
-        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 100 }}>
-          <div style={{ ...S.card, width: 320, margin: 0 }}>
-            <h2 style={{ ...S.cardTitle, marginBottom: 8 }}>Enter edit mode</h2>
-            <p style={{ ...S.muted, fontSize: 12, marginBottom: 14 }}>Enter your admin secret to add and edit indexes.</p>
-            <input
-              style={S.input} type="password" placeholder="Admin secret"
-              value={adminInput} onChange={e => setAdminInput(e.target.value)}
-              onKeyDown={e => e.key === "Enter" && tryAdminLogin()} autoFocus
-            />
-            {adminError && <p style={{ color: "#FF6B6B", fontSize: 12, marginTop: 6 }}>{adminError}</p>}
-            <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
-              <button onClick={tryAdminLogin} style={S.primaryBtn}>Enter</button>
-              <button onClick={() => { setShowAdminLogin(false); setAdminInput(""); setAdminError(""); }} style={S.ghostBtn}>Cancel</button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ── ADD BOOK ── */}
-      {view === "add" && isAdmin && (
-        <div style={S.content}>
-          <div style={S.card}>
-            <h2 style={S.cardTitle}>Add to your shelf</h2>
-            <input style={S.input} placeholder="Title *" value={newTitle}
-              onChange={e => setNewTitle(e.target.value)} autoFocus
-              onKeyDown={e => e.key === "Enter" && document.getElementById("ns-author")?.focus()} />
-            <input id="ns-author" style={{ ...S.input, marginTop: 8 }} placeholder="Author"
-              value={newAuthor} onChange={e => setNewAuthor(e.target.value)} />
-            <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-              <input style={{ ...S.input, flex: "0 0 150px" }} placeholder="Dewey (e.g. 612.8)"
-                value={newDewey} onChange={e => setNewDewey(e.target.value)} />
-              <input style={{ ...S.input, flex: 1 }} placeholder="Tags, comma-separated"
-                value={newTags} onChange={e => setNewTags(e.target.value)}
-                onKeyDown={e => e.key === "Enter" && addBook()} />
-            </div>
-            {newDewey.trim() && <p style={{ ...S.label, color: deweyColor(newDewey), marginTop: 8 }}>Dewey class {newDewey.trim()[0]}xx</p>}
-            <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
-              <button onClick={addBook} style={S.primaryBtn} disabled={!newTitle.trim()}>Add to library</button>
-              <button onClick={() => setView("library")} style={S.ghostBtn}>Cancel</button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ── LIBRARY ── */}
-      {view === "library" && (
-        <div style={S.content}>
-          {/* Import prompt — only shows when admin and DB was empty */}
-          {isAdmin && books.length === 0 && (
-            <div style={{ ...S.card, borderLeft: "3px solid #F9C74F", marginBottom: 16 }}>
-              <p style={{ ...S.cardTitle, marginBottom: 6 }}>Import your saved indexes?</p>
-              <p style={{ ...S.muted, fontSize: 13, marginBottom: 12 }}>Your 4 books from before are ready to import.</p>
-              <button onClick={importSeedData} style={S.primaryBtn}>Import indexes</button>
-            </div>
-          )}
-
-          {books.length > 0 && (
-            <input style={{ ...S.input, marginBottom: 16 }} placeholder="Search titles, authors, or tags..."
-              value={searchQuery} onChange={e => setSearchQuery(e.target.value)} />
-          )}
-
-          {filteredBooks.length === 0 && books.length === 0 && !isAdmin && (
-            <div style={{ textAlign: "center", padding: "60px 20px" }}>
-              <div style={{ fontSize: 32, marginBottom: 12 }}>📚</div>
-              <p style={{ ...S.muted, fontSize: 15 }}>No indexes yet.</p>
-            </div>
-          )}
-
-          {filteredBooks.length === 0 && books.length > 0 && (
-            <p style={{ ...S.muted, textAlign: "center", padding: 20 }}>No matches for that search.</p>
-          )}
-
-          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            {filteredBooks.map(book => {
-              const stats = bookStats(book);
-              const color = deweyColor(book.dewey);
-              return (
-                <div key={book.id}
-                  onClick={() => { setActiveBookId(book.id); setView("book"); setActiveLetter(null); setEditingNote(false); }}
-                  style={S.bookRow}
-                >
-                  <div style={{ width: 5, background: color, flexShrink: 0 }} />
-                  <div style={{ flex: 1, padding: "12px 12px 12px 14px" }}>
-                    {book.dewey && <p style={{ ...S.label, color, marginBottom: 3 }}>{book.dewey}</p>}
-                    <div style={S.bookTitle}>{book.title}</div>
-                    {book.author && <div style={S.bookAuthor}>{book.author}</div>}
-                    {(book.tags || []).length > 0 && (
-                      <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginTop: 6 }}>
-                        {book.tags.map(tag => (
-                          <span key={tag} style={{ ...S.tagPill, color, borderColor: color }}>{tag}</span>
-                        ))}
-                      </div>
-                    )}
-                    {book.sessionNote ? (
-                      <p style={{ ...S.muted, fontSize: 11, marginTop: 5, fontStyle: "italic" }}>
-                        {book.sessionNote.slice(0, 80)}{book.sessionNote.length > 80 ? "..." : ""}
-                      </p>
-                    ) : null}
-                  </div>
-                  <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 3, padding: "12px 14px", justifyContent: "center", flexShrink: 0 }}>
-                    {stats.words > 0 && <span style={S.stat}>{stats.words} terms</span>}
-                    {stats.letters > 0 && <span style={S.stat}>{stats.letters} letters</span>}
-                    {(book.images || []).length > 0 && <span style={S.stat}>{book.images.length} img</span>}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
-
-      {/* ── BOOK DETAIL ── */}
-      {view === "book" && activeBook && (
-        <div style={S.content}>
-          <div style={{ marginBottom: 22, borderLeft: "4px solid " + bookColor, paddingLeft: 14 }}>
-            {activeBook.dewey && <p style={{ ...S.label, color: bookColor, marginBottom: 4 }}>{activeBook.dewey}</p>}
-            <h2 style={{ fontFamily: "'Source Serif 4', serif", fontSize: 22, fontWeight: 700, color: "#1A1A1A", margin: "0 0 4px 0" }}>
-              {activeBook.title}
-            </h2>
-            {activeBook.author && <p style={{ ...S.muted, margin: 0 }}>{activeBook.author}</p>}
-            {(activeBook.tags || []).length > 0 && (
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginTop: 8 }}>
-                {activeBook.tags.map(tag => (
-                  <span key={tag} style={{ ...S.tagPill, color: bookColor, borderColor: bookColor }}>{tag}</span>
-                ))}
-              </div>
-            )}
-          </div>
-
-          {/* Session note */}
-          <div style={{ ...S.card, marginBottom: 16 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-              <p style={S.label}>Session notes</p>
-              {isAdmin && !editingNote && (
-                <button onClick={() => { setEditingNote(true); setNoteInput(activeBook.sessionNote || ""); }}
-                  style={{ ...S.ghostBtn, padding: "3px 10px", fontSize: 11 }}>
-                  {activeBook.sessionNote ? "Edit" : "Add note"}
-                </button>
-              )}
-            </div>
-            {editingNote && isAdmin ? (
-              <div>
-                <textarea style={{ ...S.input, minHeight: 64, resize: "vertical", lineHeight: 1.5 }}
-                  placeholder="e.g. A-C only, good but dense, return later to finish..."
-                  value={noteInput} onChange={e => setNoteInput(e.target.value)} autoFocus />
-                <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
-                  <button onClick={saveNote} style={S.primaryBtn}>Save</button>
-                  <button onClick={() => setEditingNote(false)} style={S.ghostBtn}>Cancel</button>
-                </div>
-              </div>
-            ) : (
-              <p style={{ ...S.muted, fontSize: 13, fontStyle: "italic", lineHeight: 1.5 }}>
-                {activeBook.sessionNote || "No session notes yet."}
-              </p>
-            )}
-          </div>
-
-          {/* Letter grid */}
-          <div style={{ marginBottom: 20 }}>
-            <p style={{ ...S.label, marginBottom: 8 }}>Letters indexed</p>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
-              {LETTERS.map(letter => {
-                const hasData = (activeBook.letters[letter]?.words?.length || 0) > 0;
-                const isActive = activeLetter === letter;
-                const lc = COLORS[LETTERS.indexOf(letter) % COLORS.length];
-                return (
-                  <button key={letter}
-                    onClick={() => isAdmin ? toggleLetter(letter) : (hasData && toggleLetter(letter))}
-                    style={{
-                      width: 36, height: 36, borderRadius: 8,
-                      fontFamily: "'DM Sans', sans-serif", fontSize: 13, fontWeight: 700,
-                      cursor: (isAdmin || hasData) ? "pointer" : "default",
-                      border: "none", transition: "all 0.12s",
-                      background: isActive ? lc : hasData ? lc + "33" : "#F5F3EE",
-                      color: isActive ? "#FFF" : hasData ? lc : "#C0B8A8",
-                      boxShadow: isActive ? "0 2px 10px " + lc + "55" : "none",
-                    }}>
-                    {letter}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
-          {/* Active letter */}
-          {activeLetter && (
-            <div style={{ ...S.card, borderLeft: "3px solid " + activeLetterColor, marginBottom: 16 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
-                <span style={{ fontFamily: "'Source Serif 4', serif", fontSize: 34, fontWeight: 700, color: activeLetterColor, lineHeight: 1 }}>
-                  {activeLetter}
-                </span>
-                <span style={S.label}>{activeWords.length} terms</span>
-              </div>
-              {isAdmin && (
-                <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
-                  <input style={{ ...S.input, flex: 1 }} placeholder="Add term or comma-separated terms..."
-                    value={wordInput} onChange={e => setWordInput(e.target.value)}
-                    onKeyDown={e => e.key === "Enter" && addWord()} autoFocus />
-                  <button onClick={addWord} style={{ ...S.primaryBtn, background: activeLetterColor }} disabled={!wordInput.trim()}>
-                    Add
-                  </button>
-                </div>
-              )}
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-                {activeWords.map(word => {
-                  const shared = books.some(b => b.id !== activeBookId && Object.values(b.letters || {}).some(l => l.words?.includes(word)));
-                  const wc = wordColor(word);
-                  return (
-                    <span key={word} title={shared ? "Appears in other books" : ""} style={{
-                      fontFamily: "'DM Sans', sans-serif", fontSize: 13, fontWeight: shared ? 600 : 400,
-                      padding: "5px 12px", borderRadius: 20,
-                      background: shared ? wc : "transparent",
-                      color: shared ? "#FFF" : wc,
-                      border: "2px solid " + wc,
-                      display: "inline-flex", alignItems: "center", gap: 5,
-                    }}>
-                      {shared && <span style={{ fontSize: 9 }}>&#x1F517;</span>}
-                      {word}
-                      {isAdmin && (
-                        <span onClick={() => removeWord(activeLetter, word)}
-                          style={{ cursor: "pointer", opacity: 0.5, fontSize: 14, lineHeight: 1, marginLeft: 2 }}>
-                          &times;
-                        </span>
-                      )}
-                    </span>
-                  );
-                })}
-              </div>
-              {activeWords.length === 0 && <p style={{ ...S.muted, fontSize: 12, fontStyle: "italic" }}>No terms yet.</p>}
-            </div>
-          )}
-
-          {/* All words */}
-          {!activeLetter && bookLetterEntries.length > 0 && (
-            <div style={{ ...S.card, marginBottom: 16 }}>
-              <p style={{ ...S.label, marginBottom: 10 }}>All captured terms</p>
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
-                {bookLetterEntries.map(([letter, data]) =>
-                  (data.words || []).map(word => {
-                    const shared = books.some(b => b.id !== activeBookId && Object.values(b.letters || {}).some(l => l.words?.includes(word)));
-                    const wc = wordColor(word);
-                    return (
-                      <span key={letter + word} style={{
-                        fontFamily: "'DM Sans', sans-serif", fontSize: 12, fontWeight: shared ? 600 : 400,
-                        padding: "4px 10px", borderRadius: 18,
-                        background: shared ? wc : "transparent",
-                        color: shared ? "#FFF" : wc,
-                        border: "1.5px solid " + wc,
-                        display: "inline-flex", alignItems: "center", gap: 4,
-                      }}>
-                        <span style={{ fontSize: 9, opacity: 0.55, fontWeight: 700 }}>{letter}</span>
-                        {shared && <span style={{ fontSize: 9 }}>&#x1F517;</span>}
-                        {word}
-                      </span>
-                    );
-                  })
-                )}
-              </div>
-            </div>
-          )}
-
-          {/* Extraction review panel */}
-          {isAdmin && (extracting || extractedTerms || extractError) && (
-            <ExtractionPanel
-              extracting={extracting}
-              extractedTerms={extractedTerms}
-              extractedBook={extractedBook}
-              extractError={extractError}
-              onConfirm={confirmExtractedTerms}
-              onDismiss={() => { setExtractedTerms(null); setExtractedBook(null); setPendingImage(null); setExtractError(null); }}
-            />
-          )}
-
-          {/* Images */}
-          <div style={S.card}>
-            <p style={{ ...S.label, marginBottom: 12 }}>Index images</p>
-            {isAdmin && (
-              <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
-                <input style={{ ...S.input, flex: "0 0 130px" }} placeholder="Letters (e.g. A-C)"
-                  value={imgRange} onChange={e => setImgRange(e.target.value)} />
-                <input style={{ ...S.input, flex: 1, minWidth: 120 }} placeholder="Note (optional)"
-                  value={imgNote} onChange={e => setImgNote(e.target.value)} />
-                <button onClick={() => fileRef.current && fileRef.current.click()} style={S.ghostBtn}>Upload image</button>
-                <input ref={fileRef} type="file" accept="image/*" style={{ display: "none" }} onChange={handleImageUpload} />
-                <button onClick={() => extractRef.current && extractRef.current.click()} style={{ ...S.ghostBtn, color: "#9B5DE5", borderColor: "#9B5DE5" }}>
-                  {extracting ? "Reading..." : "✦ Extract terms"}
-                </button>
-                <input ref={extractRef} type="file" accept="image/*" style={{ display: "none" }} onChange={handleExtractUpload} />
-              </div>
-            )}
-            {bookImages.length === 0 && (
-              <p style={{ ...S.muted, fontSize: 12, fontStyle: "italic" }}>
-                {isAdmin ? "No images yet. Upload photos of your handwritten index pages." : "No index images."}
-              </p>
-            )}
-            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-              {bookImages.map(img => (
-                <div key={img.id} style={{ border: "1px solid #EEEAE2", borderRadius: 10, overflow: "hidden" }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 12px", background: "#FAFAF8", borderBottom: "1px solid #EEEAE2" }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                      <span style={{ ...S.label, color: bookColor }}>{img.letterRange}</span>
-                      {img.note && <span style={{ ...S.muted, fontSize: 11, fontStyle: "italic" }}>{img.note}</span>}
-                    </div>
-                    {isAdmin && (
-                      <button onClick={() => removeImage(img.id)} style={{ ...S.ghostBtn, padding: "2px 8px", fontSize: 11, color: "#C0A0A0" }}>
-                        Remove
-                      </button>
-                    )}
-                  </div>
-                  <img src={img.dataUrl} alt="index" style={{ width: "100%", display: "block", maxHeight: 420, objectFit: "contain", background: "#F9F9F7" }} />
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {isAdmin && (
-            <button onClick={() => { if (window.confirm("Remove this book from your library?")) deleteBook(activeBook.id); }}
-              style={{ ...S.ghostBtn, color: "#C0A0A0", marginTop: 20, fontSize: 11 }}>
-              Remove this book
-            </button>
-          )}
-        </div>
-      )}
-
-      {/* ── PATTERNS ── */}
-      {view === "patterns" && (
-        <div style={S.content}>
-          <h2 style={{ ...S.cardTitle, fontSize: 20, marginBottom: 20 }}>Patterns</h2>
-          <div style={{ display: "flex", gap: 10, marginBottom: 20, flexWrap: "wrap" }}>
-            {[
-              { n: books.length, label: "Books", c: COLORS[4] },
-              { n: patterns.totalWords, label: "Unique terms", c: COLORS[5] },
-              { n: patterns.crossBook.length, label: "Cross-book", c: COLORS[2] },
-            ].map((s, i) => (
-              <div key={i} style={{ background: "#FAFAF8", border: "1px solid #EEEAE2", borderRadius: 12, padding: "14px 18px", flex: "1 1 80px", textAlign: "center" }}>
-                <div style={{ fontFamily: "'Source Serif 4', serif", fontSize: 26, fontWeight: 700, color: s.c }}>{s.n}</div>
-                <div style={{ fontFamily: "'DM Sans', sans-serif", fontSize: 11, color: "#8B8580", marginTop: 3 }}>{s.label}</div>
-              </div>
-            ))}
-          </div>
-
-          {patterns.crossBook.length > 0 && (
-            <div style={{ ...S.card, marginBottom: 12 }}>
-              <p style={{ ...S.label, marginBottom: 14 }}>Terms appearing across books</p>
-              <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-                {patterns.crossBook.map(([word, appearances]) => {
-                  const uniqueBooks = [...new Set(appearances.map(a => a.bookTitle))];
-                  const wc = wordColor(word);
-                  return (
-                    <div key={word} style={{ display: "flex", alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}>
-                      <span style={{ fontFamily: "'DM Sans', sans-serif", fontSize: 13, fontWeight: 700, padding: "5px 14px", borderRadius: 20, background: wc, color: "#FFF", flexShrink: 0 }}>
-                        {word}
-                      </span>
-                      <div style={{ paddingTop: 5 }}>
-                        <span style={{ fontFamily: "'DM Sans', sans-serif", fontSize: 12, color: "#8B8580" }}>{uniqueBooks.join(" · ")}</span>
-                        <span style={{ fontFamily: "'DM Sans', sans-serif", fontSize: 11, color: "#C0B8A8", marginLeft: 6 }}>{uniqueBooks.length} books</span>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-
-          {patterns.crossBook.length === 0 && books.length >= 2 && (
-            <div style={{ ...S.card, textAlign: "center" }}>
-              <p style={S.muted}>No overlapping terms yet. Keep indexing - connections will surface.</p>
-            </div>
-          )}
-          {books.length < 2 && (
-            <div style={{ ...S.card, textAlign: "center" }}>
-              <p style={S.muted}>Index 2+ books to start seeing cross-book patterns.</p>
-            </div>
-          )}
-
-          {patterns.allWords.length > 0 && (
-            <div style={{ ...S.card, marginTop: 12 }}>
-              <p style={{ ...S.label, marginBottom: 12 }}>All terms by frequency</p>
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
-                {patterns.allWords.slice(0, 80).map(([word, appearances]) => {
-                  const freq = appearances.length;
-                  const isMulti = new Set(appearances.map(a => a.bookId)).size > 1;
-                  const wc = wordColor(word);
-                  return (
-                    <span key={word} style={{
-                      fontFamily: "'DM Sans', sans-serif",
-                      fontSize: freq > 3 ? 16 : freq > 1 ? 13 : 11,
-                      fontWeight: freq > 2 ? 700 : 400,
-                      padding: "4px 11px", borderRadius: 18,
-                      background: isMulti ? wc : "transparent",
-                      color: isMulti ? "#FFF" : wc,
-                      border: "1.5px solid " + wc,
-                    }}>{word}</span>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-        </div>
-      )}
-
-      <div style={{ height: 48 }} />
-    </div>
-  );
-}
-
-const S = {
-  root: { width: "100vw", minHeight: "100vh", background: "#FDFCFA", fontFamily: "'DM Sans', sans-serif" },
-  header: { display: "flex", alignItems: "center", justifyContent: "space-between", padding: "14px 20px", borderBottom: "1px solid #EEEAE2", flexWrap: "wrap", gap: 10 },
-  logo: { fontFamily: "'Source Serif 4', Georgia, serif", fontSize: 18, fontWeight: 700, color: "#1A1A1A", margin: 0, cursor: "pointer" },
-  logoSub: { fontFamily: "'DM Sans', sans-serif", fontSize: 12, color: "#A09890", fontWeight: 400 },
-  content: { maxWidth: 660, margin: "0 auto", padding: "24px 20px" },
-  card: { background: "#FAFAF8", border: "1px solid #EEEAE2", borderRadius: 12, padding: "16px 18px", marginBottom: 12 },
-  cardTitle: { fontFamily: "'Source Serif 4', Georgia, serif", fontSize: 17, fontWeight: 600, color: "#1A1A1A", margin: "0 0 14px 0" },
-  input: { fontFamily: "'DM Sans', sans-serif", fontSize: 14, color: "#1A1A1A", background: "#FFF", border: "1px solid #E0DCD4", borderRadius: 8, padding: "9px 14px", width: "100%", outline: "none", boxSizing: "border-box", lineHeight: 1.4 },
-  label: { fontFamily: "'DM Sans', sans-serif", fontSize: 10, fontWeight: 700, color: "#A09890", textTransform: "uppercase", letterSpacing: "0.08em", margin: 0 },
-  muted: { fontFamily: "'DM Sans', sans-serif", fontSize: 13, color: "#A09890", margin: 0 },
-  primaryBtn: { fontFamily: "'DM Sans', sans-serif", fontSize: 13, fontWeight: 700, color: "#FFF", background: "#1A1A1A", border: "none", borderRadius: 8, padding: "8px 16px", cursor: "pointer", whiteSpace: "nowrap" },
-  ghostBtn: { fontFamily: "'DM Sans', sans-serif", fontSize: 12, fontWeight: 500, color: "#8B8580", background: "transparent", border: "1px solid #E0DCD4", borderRadius: 8, padding: "6px 14px", cursor: "pointer", whiteSpace: "nowrap" },
-  bookRow: { display: "flex", alignItems: "stretch", borderRadius: 10, background: "#FAFAF8", border: "1px solid #EEEAE2", cursor: "pointer", overflow: "hidden" },
-  bookTitle: { fontFamily: "'Source Serif 4', Georgia, serif", fontSize: 16, fontWeight: 600, color: "#1A1A1A" },
-  bookAuthor: { fontFamily: "'DM Sans', sans-serif", fontSize: 12, color: "#A09890", marginTop: 2 },
-  tagPill: { fontFamily: "'DM Sans', sans-serif", fontSize: 11, fontWeight: 500, padding: "2px 9px", borderRadius: 12, border: "1.5px solid", background: "transparent" },
-  stat: { fontFamily: "'DM Sans', sans-serif", fontSize: 11, color: "#C0B8A8" },
+/* ── Storage ── */
+const store = {
+  async load() {
+    try { const r = await window.storage.list("nsmap:", true); if (!r?.keys?.length) return [];
+      const out = []; for (const k of r.keys) { try { const r2 = await window.storage.get(k, true); if (r2?.value) out.push(JSON.parse(r2.value)); } catch {} }
+      return out.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+    } catch { return []; }
+  },
+  async save(map) { try { await window.storage.set(`nsmap:${map.id}`, JSON.stringify({ ...map, updatedAt: Date.now() }), true); return true; } catch { return false; } },
+  async remove(id) { try { await window.storage.delete(`nsmap:${id}`, true); return true; } catch { return false; } }
 };
 
-
-// ── Extraction Review Panel ──
-function ExtractionPanel({ extracting, extractedTerms, extractedBook, extractError, onConfirm, onDismiss }) {
-  const COLORS = ["#FF6B6B","#FF8C42","#F9C74F","#6BCB77","#4D96FF","#9B5DE5","#FF6B9D","#48CAE4","#F4845F","#90BE6D","#C77DFF","#FFD93D"];
-  const LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("");
-
-  const [selected, setSelected] = React.useState({});
-  const [bookMeta, setBookMeta] = React.useState({});
-
-  React.useEffect(() => {
-    if (extractedTerms) {
-      const initial = {};
-      Object.entries(extractedTerms).forEach(([letter, terms]) => {
-        initial[letter] = [...terms];
+/* ── API ── */
+async function callAI(system, userMsg, retries = 1) {
+  for (let i = 0; i <= retries; i++) {
+    try {
+      const r = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: 2000, system, messages: [{ role: "user", content: userMsg }] })
       });
-      setSelected(initial);
-    }
-    if (extractedBook) {
-      setBookMeta({ ...extractedBook });
-    }
-  }, [extractedTerms, extractedBook]);
-
-  function toggleTerm(letter, term) {
-    setSelected(prev => {
-      const terms = prev[letter] || [];
-      return terms.includes(term)
-        ? { ...prev, [letter]: terms.filter(t => t !== term) }
-        : { ...prev, [letter]: [...terms, term] };
-    });
+      if (!r.ok) throw new Error(`API error ${r.status}`);
+      const d = await r.json();
+      if (d.error) throw new Error(d.error.message);
+      const raw = d.content?.map(x => x.text || "").join("") || "";
+      return JSON.parse(raw.replace(/```json|```/g, "").trim());
+    } catch (e) { if (i === retries) throw new Error(e.message || "Failed. Try again."); }
   }
+}
 
-  function toggleBookField(field) {
-    setBookMeta(prev => ({ ...prev, [field]: prev[field] ? null : extractedBook[field] }));
+// Updated: preserves source_snippets and shift field
+const mkNodes = (p) => (p.nodes || p.updated_nodes || []).map((n, i) => ({
+  id: n.id || i + 1, label: n.label || "unnamed", color: CK.includes(n.color) ? n.color : CK[i % CK.length],
+  x: Math.max(8, Math.min(92, n.x || 20 + (i * 55 / 12))), y: Math.max(8, Math.min(92, n.y || 15 + ((i % 4) * 22))),
+  sessions: n.sessions || n.weight || 1, userAdded: n.userAdded || false,
+  is_new: n.is_new || n.shift === "new" || false,
+  shift: n.shift || null, // "new" | "strengthened" | "stable" | "faded" | null
+  from_map: n.from_map || null,
+  source_snippets: n.source_snippets || [], // anchoring phrases from input
+}));
+
+function chunkText(text, maxChars = 13000) {
+  if (text.length <= maxChars) return [text];
+  const chunks = []; let start = 0;
+  while (start < text.length) {
+    let end = Math.min(start + maxChars, text.length);
+    if (end < text.length) {
+      const lb = text.lastIndexOf("\n\n", end);
+      if (lb > start + maxChars * 0.5) end = lb;
+      else { const lp = text.lastIndexOf(". ", end); if (lp > start + maxChars * 0.5) end = lp + 1; }
+    }
+    chunks.push(text.slice(start, end)); start = end;
   }
+  return chunks;
+}
 
-  const totalSelected = Object.values(selected).reduce((s, arr) => s + arr.length, 0);
-  const letterColor = (letter) => COLORS[LETTERS.indexOf(letter) % COLORS.length];
-  const hasBookMeta = extractedBook && Object.values(extractedBook).some(v => v && (Array.isArray(v) ? v.length : true));
+function generateSVG(map) {
+  const W = 600, H = 380;
+  let svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" style="background:#f5f1ec;font-family:Georgia,serif">`;
+  (map.connections || []).forEach(([a, b]) => {
+    const na = map.nodes.find(n => n.id === a), nb = map.nodes.find(n => n.id === b);
+    if (na && nb) svg += `<line x1="${(na.x/100)*W}" y1="${(na.y/100)*H}" x2="${(nb.x/100)*W}" y2="${(nb.y/100)*H}" stroke="#D0C8BC" stroke-width="0.8" stroke-dasharray="3 4" opacity="0.4"/>`;
+  });
+  map.nodes.forEach(n => {
+    const x = (n.x / 100) * W, y = (n.y / 100) * H, c = tc(n.color);
+    const lw = Math.max(n.label.length * 5.8 + 22, 58);
+    svg += `<rect x="${x-lw/2}" y="${y-10}" width="${lw}" height="21" rx="10.5" fill="${c.bg}" stroke="${c.border}" stroke-width="1"/>`;
+    svg += `<text x="${x}" y="${y+4}" text-anchor="middle" font-size="9.5" fill="${c.text}">${n.label}</text>`;
+  });
+  svg += `</svg>`;
+  return svg;
+}
+
+/* ── Canvas with shift indicators ── */
+function Canvas({ map, activeNode, setActiveNode, editable, onMove, reducedMotion }) {
+  const W = 600, H = 380, drag = useRef(null), svgEl = useRef(null);
+  const getXY = (e) => e.touches?.length ? { x: e.touches[0].clientX, y: e.touches[0].clientY } : { x: e.clientX, y: e.clientY };
+  const startDrag = (e, n) => { if (!editable) return; e.stopPropagation(); if (e.cancelable) e.preventDefault(); const { x, y } = getXY(e); drag.current = { id: n.id, sx: x, sy: y, ox: n.x, oy: n.y }; };
+  const moveDrag = useCallback((e) => {
+    if (!drag.current || !svgEl.current) return;
+    const { x, y } = e.touches?.length ? { x: e.touches[0].clientX, y: e.touches[0].clientY } : { x: e.clientX, y: e.clientY };
+    const rect = svgEl.current.getBoundingClientRect();
+    onMove?.(drag.current.id, Math.max(8, Math.min(92, drag.current.ox + ((x - drag.current.sx) / rect.width) * 100)), Math.max(8, Math.min(92, drag.current.oy + ((y - drag.current.sy) / rect.height) * 100)));
+  }, [onMove]);
+  const endDrag = useCallback(() => { drag.current = null; }, []);
+  useEffect(() => {
+    if (!editable) return;
+    window.addEventListener("mousemove", moveDrag); window.addEventListener("mouseup", endDrag);
+    window.addEventListener("touchmove", moveDrag, { passive: false }); window.addEventListener("touchend", endDrag);
+    return () => { window.removeEventListener("mousemove", moveDrag); window.removeEventListener("mouseup", endDrag); window.removeEventListener("touchmove", moveDrag); window.removeEventListener("touchend", endDrag); };
+  }, [editable, moveDrag, endDrag]);
+  const trans = reducedMotion ? "none" : "all 0.25s";
 
   return (
-    <div style={EP.panel}>
+    <div style={{ position: "relative", width: "100%", paddingBottom: "63%", borderRadius: 14, overflow: "hidden", background: C.warm, border: `1px solid ${C.border}`, touchAction: editable ? "none" : "auto" }}
+      role="img" aria-label={`Cognitive map: ${map.nodes.length} patterns, ${(map.connections||[]).length} connections`}>
+      <svg ref={svgEl} viewBox={`0 0 ${W} ${H}`} style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }}>
+        <defs>
+          <radialGradient id="g1" cx="75%" cy="15%" r="40%"><stop offset="0%" stopColor="#FFD6E0" stopOpacity="0.1" /><stop offset="100%" stopColor="#FFD6E0" stopOpacity="0" /></radialGradient>
+          <radialGradient id="g2" cx="15%" cy="80%" r="35%"><stop offset="0%" stopColor="#D4F5E9" stopOpacity="0.1" /><stop offset="100%" stopColor="#D4F5E9" stopOpacity="0" /></radialGradient>
+        </defs>
+        <rect width={W} height={H} fill="url(#g1)" /><rect width={W} height={H} fill="url(#g2)" />
+        {(map.connections || []).map(([a, b], i) => {
+          const na = map.nodes.find(n => n.id === a), nb = map.nodes.find(n => n.id === b);
+          if (!na || !nb) return null;
+          const act = activeNode === a || activeNode === b;
+          return <line key={i} x1={(na.x / 100) * W} y1={(na.y / 100) * H} x2={(nb.x / 100) * W} y2={(nb.y / 100) * H}
+            stroke={act ? "#8C7A5A" : "#D0C8BC"} strokeWidth={act ? 1.8 : 0.8} strokeDasharray={act ? "none" : "3 4"} opacity={act ? 0.85 : 0.4} style={{ transition: trans }} />;
+        })}
+        {map.nodes.map(n => {
+          const x = (n.x / 100) * W, y = (n.y / 100) * H, c = tc(n.color);
+          const lw = Math.max(n.label.length * 5.8 + 22, 58), act = activeNode === n.id;
+          const isFaded = n.shift === "faded";
+          const isNew = n.shift === "new" || n.is_new;
+          const isStrengthened = n.shift === "strengthened";
+          const nodeOpacity = isFaded ? 0.45 : 1;
+
+          return (<g key={n.id} tabIndex={0} role="button" aria-label={`${n.label}, ${n.sessions} sessions${isNew ? ", new" : ""}${isStrengthened ? ", strengthened" : ""}${isFaded ? ", fading" : ""}`} aria-pressed={act}
+            style={{ cursor: editable ? "grab" : "pointer", outline: "none", opacity: nodeOpacity }}
+            onClick={() => !drag.current && setActiveNode(act ? null : n.id)}
+            onKeyDown={e => (e.key === "Enter" || e.key === " ") && setActiveNode(act ? null : n.id)}
+            onMouseDown={e => startDrag(e, n)} onTouchStart={e => startDrag(e, n)}>
+            {act && <ellipse cx={x} cy={y} rx={lw / 2 + 10} ry={16} fill={c.glow} />}
+            {/* Strengthened: double border ring */}
+            {isStrengthened && <rect x={x - lw / 2 - 3} y={y - 13} width={lw + 6} height={27} rx={13.5} fill="none" stroke={c.border} strokeWidth={1} strokeDasharray="2 2" opacity={0.6} />}
+            <rect x={x - lw / 2} y={y - 10} width={lw} height={21} rx={10.5} fill={act ? c.bg : c.bg + "CC"} stroke={c.border} strokeWidth={act ? 2 : 1}
+              style={{ transition: trans, filter: act ? `drop-shadow(0 2px 8px ${c.border})` : "none" }} />
+            {n.userAdded && <text x={x - lw / 2 + 7} y={y + 4} fontSize="8" fill={c.text} opacity="0.7" style={{ pointerEvents: "none" }}>✦</text>}
+            <text x={x + (n.userAdded ? 3 : 0)} y={y + 4} textAnchor="middle" fontSize={act ? "10.5" : "9.5"}
+              fontFamily="'Source Serif 4','DM Serif Display',Georgia,serif" fill={c.text} fontWeight={act ? "600" : "400"}
+              style={{ transition: trans, pointerEvents: "none" }}>{n.label}</text>
+            {(n.sessions || 0) > 1 && <circle cx={x + lw / 2 - 3} cy={y - 10} r={3.5} fill={c.border} />}
+            {/* NEW indicator dot */}
+            {isNew && <circle cx={x - lw / 2 + 3} cy={y - 10} r={3} fill={RAINBOW[3]} />}
+          </g>);
+        })}
+      </svg>
+    </div>
+  );
+}
+
+function VisualCanvas({ map }) {
+  const W = 600, H = 380;
+  return (
+    <div style={{ position: "relative", width: "100%", paddingBottom: "63%", borderRadius: 14, overflow: "hidden", background: C.warm, border: `1px solid ${C.border}` }}>
+      <svg viewBox={`0 0 ${W} ${H}`} style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }}>
+        {(map.connections || []).map(([a, b], i) => {
+          const na = map.nodes.find(n => n.id === a), nb = map.nodes.find(n => n.id === b);
+          if (!na || !nb) return null;
+          return <line key={i} x1={(na.x / 100) * W} y1={(na.y / 100) * H} x2={(nb.x / 100) * W} y2={(nb.y / 100) * H} stroke="#D0C8BC" strokeWidth={1} opacity={0.5} />;
+        })}
+        {map.nodes.map(n => {
+          const x = (n.x / 100) * W, y = (n.y / 100) * H, c = tc(n.color);
+          return <circle key={n.id} cx={x} cy={y} r={6 + (n.sessions || 1) * 1.5} fill={c.bg} stroke={c.border} strokeWidth={1.5} opacity={n.shift === "faded" ? 0.4 : 0.9} />;
+        })}
+      </svg>
+    </div>
+  );
+}
+
+/* ── Input Panel (updated placeholder) ── */
+function InputPanel({ onNew, onAdd, targets, busy }) {
+  const [txt, setTxt] = useState(""); const [to, setTo] = useState("new"); const [err, setErr] = useState(null);
+  const [msg, setMsg] = useState(""); const [fileCount, setFileCount] = useState(0);
+  const [dragging, setDragging] = useState(false);
+  const fr = useRef(null);
+  const msgs = ["reading your text…", "finding patterns…", "tracing connections…", "mapping what recurs…", "almost there…"];
+  const words = txt.trim() ? wordCount(txt) : 0;
+  const willChunk = txt.length > 13000;
+  const chunks = willChunk ? chunkText(txt) : null;
+
+  const addFiles = useCallback(async (files) => {
+    let added = 0;
+    for (const f of files) {
+      if (f.name.endsWith(".docx") || f.name.endsWith(".doc")) { setErr(`"${f.name}" is a Word file — save as .txt or .md first, or paste the text directly.`); continue; }
+      if (f.name.endsWith(".pdf")) { setErr(`"${f.name}" is a PDF — paste the text content directly, or export to .txt first.`); continue; }
+      try { const t = await f.text(); if (t.trim()) { setTxt(p => p ? p + "\n\n— " + f.name + " —\n\n" + t : t); added++; } }
+      catch { setErr("Couldn't read " + f.name + " — try pasting the text directly."); }
+    }
+    setFileCount(p => p + added);
+  }, []);
+
+  const handleFileInput = useCallback(async (e) => { await addFiles(Array.from(e.target.files || [])); if (fr.current) fr.current.value = ""; }, [addFiles]);
+  const handleDragOver = useCallback((e) => { e.preventDefault(); e.stopPropagation(); setDragging(true); }, []);
+  const handleDragLeave = useCallback((e) => { e.preventDefault(); e.stopPropagation(); setDragging(false); }, []);
+  const handleDrop = useCallback(async (e) => {
+    e.preventDefault(); e.stopPropagation(); setDragging(false);
+    const files = Array.from(e.dataTransfer?.files || []);
+    if (files.length) await addFiles(files);
+    else { const text = e.dataTransfer?.getData("text"); if (text) setTxt(p => p ? p + "\n\n" + text : text); }
+  }, [addFiles]);
+
+  const go = async () => {
+    if (!txt.trim() || txt.trim().length < 80) { setErr("Paste a bit more — at least a paragraph."); return; }
+    setErr(null); let i = 0; setMsg(msgs[0]);
+    const iv = setInterval(() => { i = Math.min(i + 1, msgs.length - 1); setMsg(msgs[i]); }, 3200);
+    try {
+      if (to === "new") { if (willChunk) await onNew(chunks[0], chunks.slice(1)); else await onNew(txt); }
+      else { await onAdd(to, txt); }
+      setTxt(""); setFileCount(0);
+    } catch (e) { setErr(e.message || "Something went wrong."); }
+    finally { clearInterval(iv); setMsg(""); }
+  };
+
+  const summary = () => {
+    const parts = [];
+    if (fileCount > 0) parts.push(`${fileCount} file${fileCount !== 1 ? "s" : ""}`);
+    if (fileCount === 0 && txt.trim()) parts.push("pasted text");
+    if (words > 0) parts.push(`~${words.toLocaleString()} words`);
+    return parts.join(" · ");
+  };
+
+  return (
+    <div onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop}
+      style={{ background: dragging ? C.warm : C.surface, borderRadius: 16, border: `2px ${dragging ? "dashed" : "solid"} ${dragging ? C.accent : C.border}`, padding: "24px 26px", transition: "all 0.2s" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+        <div style={{ width: 8, height: 8, borderRadius: "50%", background: RAINBOW[4] }} />
+        <span style={{ fontSize: 11, letterSpacing: "0.12em", textTransform: "uppercase", color: C.muted }}>add content</span>
+      </div>
+      <p style={{ fontSize: 13, color: C.muted, lineHeight: 1.65, margin: "0 0 14px", fontFamily: "'Source Serif 4',Georgia,serif", fontStyle: "italic" }}>
+        Paste anything — AI conversations, journal entries, notes, outlines, gravity wells. Unfinished, contradictory, and repetitive material works best. Drag files here or use the button below.
+      </p>
+      <textarea value={txt} onChange={e => { setTxt(e.target.value); setErr(null); }}
+        placeholder={"Paste your text here — notes, conversations, outlines, half-finished thoughts, whatever you have.\n\nIt doesn't need to be organized. It doesn't need to be complete. Just put it in."}
+        aria-label="Text input for pattern analysis"
+        style={{ width: "100%", minHeight: 140, padding: "14px 16px", borderRadius: 10, border: `1px solid ${C.border}`, background: C.warm, color: C.text, fontSize: 13, fontFamily: "'Source Serif 4',Georgia,serif", lineHeight: 1.7, resize: "vertical", outline: "none", boxSizing: "border-box" }}
+        onFocus={e => e.target.style.borderColor = C.accent} onBlur={e => e.target.style.borderColor = C.border} />
+      {(txt.length > 0 || fileCount > 0) && (
+        <div style={{ marginTop: 8, fontSize: 11, color: willChunk ? "#d4a843" : C.muted, display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: 4 }}>
+          <span>{summary()}</span>
+          {willChunk && <span style={{ fontStyle: "italic" }}>Large input — will process in {chunks.length} passes automatically</span>}
+        </div>
+      )}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 10, flexWrap: "wrap", gap: 10 }}>
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          <input ref={fr} type="file" accept=".txt,.md,.csv,.json,.html" multiple onChange={handleFileInput} style={{ display: "none" }} />
+          <button onClick={() => fr.current?.click()} aria-label="Upload files" style={{ background: C.warm, border: `1px solid ${C.border}`, borderRadius: 20, padding: "6px 14px", fontSize: 12, cursor: "pointer", color: C.muted }}>+ add files</button>
+          <span style={{ fontSize: 10, color: C.muted }}>.txt .md .csv .json .html</span>
+        </div>
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          <select value={to} onChange={e => setTo(e.target.value)} aria-label="Target map" style={{ background: C.warm, border: `1px solid ${C.border}`, borderRadius: 20, padding: "6px 14px", fontSize: 12, color: C.text, outline: "none", cursor: "pointer", appearance: "none", backgroundImage: `url("data:image/svg+xml,%3Csvg width='10' height='6' viewBox='0 0 10 6' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 1L5 5L9 1' stroke='%237a7068' stroke-width='1.5' stroke-linecap='round'/%3E%3C/svg%3E")`, backgroundRepeat: "no-repeat", backgroundPosition: "right 10px center", paddingRight: 28 }}>
+            <option value="new">→ new map</option>
+            {targets.map(m => <option key={m.id} value={m.id}>→ add to: {m.label}</option>)}
+          </select>
+          <button onClick={go} disabled={busy} aria-busy={busy} style={{ background: busy ? C.muted : C.text, color: "#fff", border: "none", borderRadius: 20, padding: "8px 22px", fontSize: 12, cursor: busy ? "wait" : "pointer", fontWeight: 500, opacity: busy ? 0.7 : 1 }}>
+            {busy ? "mapping…" : to === "new" ? "generate map" : "add to map"}</button>
+        </div>
+      </div>
+      {busy && msg && <div role="status" style={{ marginTop: 14, padding: "10px 14px", borderRadius: 10, background: C.warm, fontSize: 12, color: RAINBOW[4], fontStyle: "italic", fontFamily: "'Source Serif 4',Georgia,serif" }}>{msg}</div>}
+      {err && <div role="alert" style={{ marginTop: 12, padding: "10px 14px", borderRadius: 10, background: C.errBg, fontSize: 12, color: C.err, borderLeft: "3px solid #FFCAB8" }}>{err}</div>}
+    </div>
+  );
+}
+
+/* ── Structure Panel ── */
+function StructurePanel({ map, onClose }) {
+  const [mode, setMode] = useState(null); const [result, setResult] = useState(null);
+  const [busy, setBusy] = useState(false); const [err, setErr] = useState(null);
+  const mapDesc = JSON.stringify({ nodes: map.nodes.map(n => ({ id: n.id, label: n.label, color: n.color, sessions: n.sessions })), connections: map.connections });
+  const generate = async (type) => {
+    setMode(type); setResult(null); setErr(null); setBusy(true);
+    try {
+      if (type === "visual") { setResult({ type: "visual" }); setBusy(false); return; }
+      const prompts = {
+        hierarchy: `Given this cognitive map, create a HIERARCHICAL INDEX grouped by color cluster with "see also" cross-references.\nRespond with JSON: {"sections":[{"heading":"cluster name","color":"pink","entries":[{"term":"pattern","sessions":5,"see_also":["other"]}]}]}`,
+        outline: `Given this cognitive map, create a LINEAR OUTLINE walking through patterns one step at a time, starting with the most foundational.\nRespond with JSON: {"title":"outline title","steps":[{"number":1,"pattern":"name","color":"pink","sessions":5,"why":"one sentence","connects_to":"next"}]}`,
+        narrative: NARRATIVE_PROMPT,
+      };
+      const p = await callAI(STRUCTURE_SYS + "\n\n" + prompts[type], `Map data:\n${mapDesc}`);
+      setResult({ type, data: p });
+    } catch (e) { setErr(e.message); } finally { setBusy(false); }
+  };
+  return (
+    <div style={{ background: C.surface, borderRadius: 16, border: `1px solid ${C.border}`, padding: "24px 26px", marginBottom: 14 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
-        <p style={EP.title}>✦ Claude read your index</p>
-        <button onClick={onDismiss} style={EP.dismissBtn}>&times;</button>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}><div style={{ width: 8, height: 8, borderRadius: "50%", background: RAINBOW[5] }} /><span style={{ fontSize: 11, letterSpacing: "0.12em", textTransform: "uppercase", color: C.muted }}>build structure from map</span></div>
+        <button onClick={onClose} aria-label="Close" style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 16, padding: "4px 8px" }}>×</button>
       </div>
-
-      {extracting && (
-        <div style={{ textAlign: "center", padding: "20px 0" }}>
-          <div style={{ fontSize: 24, marginBottom: 8 }}>👁</div>
-          <p style={{ fontFamily: "'DM Sans', sans-serif", fontSize: 13, color: "#9B5DE5" }}>Reading your index...</p>
-        </div>
-      )}
-
-      {extractError && (
-        <p style={{ fontFamily: "'DM Sans', sans-serif", fontSize: 13, color: "#FF6B6B" }}>
-          Could not read image: {extractError}
-        </p>
-      )}
-
-      {!extracting && extractedTerms && (
-        <>
-          {/* Book metadata suggestions */}
-          {hasBookMeta && (
-            <div style={{ marginBottom: 16, padding: "12px 14px", background: "#F3EEFF", borderRadius: 10, border: "1px solid #DDD0FF" }}>
-              <p style={{ ...EP.sectionLabel, color: "#9B5DE5", marginBottom: 10 }}>Book details found — click to deselect</p>
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-                {extractedBook.title && (
-                  <span onClick={() => toggleBookField("title")} style={{ ...EP.metaPill, opacity: bookMeta.title ? 1 : 0.4, textDecoration: bookMeta.title ? "none" : "line-through" }}>
-                    Title: {extractedBook.title}
-                  </span>
-                )}
-                {extractedBook.author && (
-                  <span onClick={() => toggleBookField("author")} style={{ ...EP.metaPill, opacity: bookMeta.author ? 1 : 0.4, textDecoration: bookMeta.author ? "none" : "line-through" }}>
-                    Author: {extractedBook.author}
-                  </span>
-                )}
-                {extractedBook.dewey && (
-                  <span onClick={() => toggleBookField("dewey")} style={{ ...EP.metaPill, opacity: bookMeta.dewey ? 1 : 0.4, textDecoration: bookMeta.dewey ? "none" : "line-through" }}>
-                    Dewey: {extractedBook.dewey}
-                  </span>
-                )}
-                {(extractedBook.tags || []).map(tag => (
-                  <span key={tag} style={{ ...EP.metaPill, fontSize: 11, opacity: bookMeta.tags ? 1 : 0.4 }}>
-                    #{tag}
-                  </span>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Terms */}
-          {Object.keys(extractedTerms).length === 0 ? (
-            <p style={{ fontFamily: "'DM Sans', sans-serif", fontSize: 13, color: "#A09890", fontStyle: "italic", marginBottom: 14 }}>
-              No terms could be read. Try a clearer photo.
-            </p>
-          ) : (
-            <>
-              <p style={{ ...EP.sectionLabel, marginBottom: 10 }}>
-                {totalSelected} terms — click any to deselect
-              </p>
-              <div style={{ display: "flex", flexDirection: "column", gap: 12, marginBottom: 16 }}>
-                {Object.entries(extractedTerms).sort().map(([letter, terms]) => {
-                  const lc = letterColor(letter);
-                  const selectedTerms = selected[letter] || [];
-                  return (
-                    <div key={letter}>
-                      <span style={{ fontFamily: "'Source Serif 4', serif", fontSize: 20, fontWeight: 700, color: lc }}>
-                        {letter}
-                      </span>
-                      <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginTop: 5 }}>
-                        {terms.map(term => {
-                          const isSel = selectedTerms.includes(term);
-                          return (
-                            <span key={term} onClick={() => toggleTerm(letter, term)} style={{
-                              fontFamily: "'DM Sans', sans-serif", fontSize: 12,
-                              padding: "4px 10px", borderRadius: 18, cursor: "pointer",
-                              background: isSel ? lc : "transparent",
-                              color: isSel ? "#FFF" : lc,
-                              border: "1.5px solid " + lc,
-                              opacity: isSel ? 1 : 0.4,
-                              transition: "all 0.1s",
-                              textDecoration: isSel ? "none" : "line-through",
-                            }}>
-                              {term}
-                            </span>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </>
-          )}
-
-          <div style={{ display: "flex", gap: 8 }}>
-            <button
-              onClick={() => onConfirm(selected, bookMeta)}
-              style={{ fontFamily: "'DM Sans', sans-serif", fontSize: 13, fontWeight: 700, color: "#FFF", background: "#9B5DE5", border: "none", borderRadius: 8, padding: "8px 16px", cursor: "pointer" }}
-            >
-              {totalSelected > 0 ? `Add ${totalSelected} terms` : "Apply"}
-            </button>
-            <button onClick={onDismiss} style={{ fontFamily: "'DM Sans', sans-serif", fontSize: 12, fontWeight: 500, color: "#8B8580", background: "transparent", border: "1px solid #E0DCD4", borderRadius: 8, padding: "6px 14px", cursor: "pointer" }}>
-              Discard
-            </button>
-          </div>
-        </>
-      )}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(140px, 1fr))", gap: 8, marginBottom: 16 }}>
+        {[{ id: "hierarchy", label: "Hierarchical Index", desc: "Grouped with see-also" },{ id: "outline", label: "One Step at a Time", desc: "Linear path through" },{ id: "visual", label: "Visual Only", desc: "Shapes, no words" },{ id: "narrative", label: "Narrative Summary", desc: "Prose, second person" }].map(opt => (
+          <button key={opt.id} onClick={() => generate(opt.id)} disabled={busy} aria-pressed={mode === opt.id}
+            style={{ background: mode === opt.id ? C.warm : C.surface, border: `1.5px solid ${mode === opt.id ? C.accent : C.border}`, borderRadius: 12, padding: "12px 14px", cursor: busy ? "wait" : "pointer", textAlign: "left" }}>
+            <div style={{ fontSize: 12, fontWeight: 500, color: C.text, marginBottom: 3, fontFamily: "'DM Serif Display',serif" }}>{opt.label}</div>
+            <div style={{ fontSize: 10, color: C.muted, lineHeight: 1.4 }}>{opt.desc}</div>
+          </button>
+        ))}
+      </div>
+      {busy && <div role="status" style={{ padding: "10px 14px", borderRadius: 10, background: C.warm, fontSize: 12, color: RAINBOW[5], fontStyle: "italic", fontFamily: "'Source Serif 4',Georgia,serif" }}>building structure…</div>}
+      {err && <div role="alert" style={{ padding: "10px 14px", borderRadius: 10, background: C.errBg, fontSize: 12, color: C.err, borderLeft: "3px solid #FFCAB8" }}>{err}</div>}
+      {result?.type === "visual" && <div><VisualCanvas map={map} /><div style={{ fontSize: 10, color: C.muted, marginTop: 8, fontStyle: "italic" }}>Circles sized by frequency. Colors show clusters. Lines show connections.</div></div>}
+      {result?.type === "hierarchy" && result.data?.sections && <div>{result.data.sections.map((sec, i) => (
+        <div key={i} style={{ marginBottom: 14 }}><div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}><div style={{ width: 10, height: 10, borderRadius: "50%", background: tc(sec.color).bg, border: `1.5px solid ${tc(sec.color).border}` }} /><span style={{ fontFamily: "'DM Serif Display',serif", fontSize: 15, color: C.text }}>{sec.heading}</span></div>
+          {sec.entries?.map((e, j) => (<div key={j} style={{ paddingLeft: 24, marginBottom: 5, fontSize: 13, color: C.text, lineHeight: 1.6, fontFamily: "'Source Serif 4',Georgia,serif" }}><span style={{ fontWeight: 500 }}>{e.term}</span><span style={{ color: C.muted, fontSize: 11 }}> ({e.sessions})</span>{e.see_also?.length > 0 && <div style={{ paddingLeft: 16, fontSize: 11, color: C.muted, fontStyle: "italic" }}>see also: {e.see_also.join(", ")}</div>}</div>))}</div>))}</div>}
+      {result?.type === "outline" && result.data?.steps && <div>{result.data.title && <div style={{ fontFamily: "'DM Serif Display',serif", fontSize: 16, marginBottom: 12, color: C.text }}>{result.data.title}</div>}
+        {result.data.steps.map((s, i) => (<div key={i} style={{ display: "flex", gap: 12, marginBottom: 12, alignItems: "flex-start" }}><div style={{ width: 26, height: 26, borderRadius: "50%", background: tc(s.color).bg, border: `1.5px solid ${tc(s.color).border}`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 600, color: tc(s.color).text, flexShrink: 0 }}>{s.number}</div><div style={{ flex: 1 }}><div style={{ fontSize: 13, fontWeight: 500, color: C.text, fontFamily: "'Source Serif 4',Georgia,serif" }}>{s.pattern}</div><div style={{ fontSize: 12, color: C.muted, lineHeight: 1.5 }}>{s.why}</div>{s.connects_to && <div style={{ fontSize: 11, color: C.accent, marginTop: 2 }}>→ {s.connects_to}</div>}</div></div>))}</div>}
+      {result?.type === "narrative" && result.data?.narrative && <div style={{ fontSize: 14, color: C.text, lineHeight: 1.8, fontFamily: "'Source Serif 4',Georgia,serif", whiteSpace: "pre-wrap" }}>{result.data.narrative}</div>}
     </div>
   );
 }
 
-const EP = {
-  panel: {
-    background: "#FAF7FF", border: "2px solid #9B5DE5",
-    borderRadius: 12, padding: "16px 18px", marginBottom: 12,
-  },
-  title: {
-    fontFamily: "'DM Sans', sans-serif", fontSize: 13, fontWeight: 700,
-    color: "#9B5DE5", textTransform: "uppercase", letterSpacing: "0.06em", margin: 0,
-  },
-  sectionLabel: {
-    fontFamily: "'DM Sans', sans-serif", fontSize: 11, fontWeight: 700,
-    color: "#A09890", textTransform: "uppercase", letterSpacing: "0.06em", margin: 0,
-  },
-  dismissBtn: {
-    background: "transparent", border: "none", fontSize: 20,
-    color: "#C0B8A8", cursor: "pointer", lineHeight: 1, padding: 0,
-  },
-  metaPill: {
-    fontFamily: "'DM Sans', sans-serif", fontSize: 12, fontWeight: 500,
-    padding: "4px 11px", borderRadius: 18, cursor: "pointer",
-    background: "#EDE0FF", color: "#7B3FBF",
-    border: "1.5px solid #DDD0FF", transition: "all 0.1s",
-  },
-};
+function ExportPanel({ map, onClose }) {
+  const [copied, setCopied] = useState(null);
+  const copySVG = () => { navigator.clipboard?.writeText(generateSVG(map)).then(() => { setCopied("svg"); setTimeout(() => setCopied(null), 2000); }); };
+  const copyJSON = () => { navigator.clipboard?.writeText(JSON.stringify({ title: map.label, subtitle: map.subtitle, nodes: map.nodes.map(n => ({ label: n.label, color: n.color, sessions: n.sessions, x: n.x, y: n.y, source_snippets: n.source_snippets })), connections: map.connections, insight: map.insight }, null, 2)).then(() => { setCopied("json"); setTimeout(() => setCopied(null), 2000); }); };
+  const downloadSVG = () => { const blob = new Blob([generateSVG(map)], { type: "image/svg+xml" }); const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = `${map.label.replace(/\s+/g, "-").toLowerCase()}-map.svg`; a.click(); URL.revokeObjectURL(url); };
+  return (
+    <div style={{ background: C.surface, borderRadius: 16, border: `1px solid ${C.border}`, padding: "24px 26px", marginBottom: 14 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}><div style={{ width: 8, height: 8, borderRadius: "50%", background: RAINBOW[8] }} /><span style={{ fontSize: 11, letterSpacing: "0.12em", textTransform: "uppercase", color: C.muted }}>export & share</span></div>
+        <button onClick={onClose} aria-label="Close" style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 16, padding: "4px 8px" }}>×</button>
+      </div>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        <button onClick={downloadSVG} style={{ background: C.warm, border: `1px solid ${C.border}`, borderRadius: 12, padding: "10px 16px", cursor: "pointer", textAlign: "left", flex: "1 1 140px" }}><div style={{ fontSize: 12, fontWeight: 500, color: C.text }}>Download SVG</div><div style={{ fontSize: 10, color: C.muted }}>Image — share anywhere</div></button>
+        <button onClick={copySVG} style={{ background: C.warm, border: `1px solid ${copied === "svg" ? RAINBOW[3] : C.border}`, borderRadius: 12, padding: "10px 16px", cursor: "pointer", textAlign: "left", flex: "1 1 140px" }}><div style={{ fontSize: 12, fontWeight: 500, color: C.text }}>{copied === "svg" ? "Copied!" : "Copy SVG"}</div><div style={{ fontSize: 10, color: C.muted }}>Paste into Figma, docs</div></button>
+        <button onClick={copyJSON} style={{ background: C.warm, border: `1px solid ${copied === "json" ? RAINBOW[3] : C.border}`, borderRadius: 12, padding: "10px 16px", cursor: "pointer", textAlign: "left", flex: "1 1 140px" }}><div style={{ fontSize: 12, fontWeight: 500, color: C.text }}>{copied === "json" ? "Copied!" : "Copy Map Data"}</div><div style={{ fontSize: 10, color: C.muted }}>JSON with source snippets</div></button>
+      </div>
+    </div>
+  );
+}
+
+function CombinePanel({ maps, currentMapId, onCombine, onClose, busy }) {
+  const [tid, setTid] = useState(""); const others = maps.filter(m => m.id !== currentMapId);
+  return (
+    <div style={{ background: C.surface, borderRadius: 16, border: `1px solid ${C.border}`, padding: "24px 26px", marginBottom: 14 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}><div style={{ width: 8, height: 8, borderRadius: "50%", background: RAINBOW[3] }} /><span style={{ fontSize: 11, letterSpacing: "0.12em", textTransform: "uppercase", color: C.muted }}>combine with another map</span></div>
+        <button onClick={onClose} aria-label="Close" style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 16 }}>×</button>
+      </div>
+      {others.length === 0 ? <p style={{ fontSize: 13, color: C.muted, fontStyle: "italic", fontFamily: "'Source Serif 4',Georgia,serif" }}>You need at least two saved maps to combine.</p> : (<>
+        <p style={{ fontSize: 13, color: C.muted, lineHeight: 1.6, margin: "0 0 12px", fontFamily: "'Source Serif 4',Georgia,serif", fontStyle: "italic" }}>Overlapping patterns merge and strengthen. Unique patterns stay. New cross-connections form.</p>
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          <select value={tid} onChange={e => setTid(e.target.value)} aria-label="Map to combine with" style={{ background: C.warm, border: `1px solid ${C.border}`, borderRadius: 20, padding: "6px 14px", fontSize: 12, color: C.text, outline: "none", flex: 1, minWidth: 200, appearance: "none", backgroundImage: `url("data:image/svg+xml,%3Csvg width='10' height='6' viewBox='0 0 10 6' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 1L5 5L9 1' stroke='%237a7068' stroke-width='1.5' stroke-linecap='round'/%3E%3C/svg%3E")`, backgroundRepeat: "no-repeat", backgroundPosition: "right 10px center", paddingRight: 28 }}>
+            <option value="">choose a map…</option>
+            {others.map(m => <option key={m.id} value={m.id}>{m.label} ({m.nodes.length} patterns)</option>)}
+          </select>
+          <button onClick={() => tid && onCombine(tid)} disabled={!tid || busy} style={{ background: !tid || busy ? C.muted : C.text, color: "#fff", border: "none", borderRadius: 20, padding: "8px 22px", fontSize: 12, cursor: !tid || busy ? "not-allowed" : "pointer", fontWeight: 500 }}>{busy ? "combining…" : "combine"}</button>
+        </div>
+      </>)}
+    </div>
+  );
+}
+
+const Pill = ({ children, active, onClick }) => (<button onClick={onClick} aria-pressed={active} style={{ background: active ? C.text : C.surface, color: active ? "#fff" : C.muted, border: `1px solid ${active ? C.text : C.border}`, borderRadius: 20, padding: "5px 14px", fontSize: 11, cursor: "pointer", fontWeight: active ? 500 : 400 }}>{children}</button>);
+
+function MapCard({ m, onClick, onDelete }) {
+  return (
+    <div onClick={onClick} role="button" tabIndex={0} onKeyDown={e => (e.key === "Enter" || e.key === " ") && onClick()}
+      style={{ background: C.surface, borderRadius: 14, border: `1px solid ${C.border}`, padding: "18px 20px", cursor: "pointer", transition: "border-color 0.2s", position: "relative", overflow: "hidden" }}
+      onMouseEnter={e => e.currentTarget.style.borderColor = C.accent} onMouseLeave={e => e.currentTarget.style.borderColor = C.border}>
+      <div style={{ height: 3, background: `linear-gradient(90deg,${RAINBOW.slice(0, 5).join(",")})`, position: "absolute", top: 0, left: 0, right: 0 }} />
+      <h3 style={{ fontFamily: "'DM Serif Display',serif", fontSize: 16, fontWeight: 400, margin: "6px 0 4px" }}>{m.label}</h3>
+      <div style={{ fontSize: 11, color: C.muted, marginBottom: 8 }}>{m.subtitle}</div>
+      <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+        {m.nodes.slice(0, 5).map(n => <span key={n.id} style={{ background: tc(n.color).bg, color: tc(n.color).text, fontSize: 9, padding: "2px 7px", borderRadius: 8, border: `1px solid ${tc(n.color).border}` }}>{n.label}</span>)}
+        {m.nodes.length > 5 && <span style={{ fontSize: 9, color: C.muted }}>+{m.nodes.length - 5}</span>}
+      </div>
+      <div style={{ display: "flex", justifyContent: "space-between", marginTop: 10, fontSize: 10, color: C.muted }}><span>{m.nodes.length} patterns</span>{m.sources && <span>{m.sources.length} source{m.sources.length !== 1 ? "s" : ""}</span>}</div>
+      {onDelete && <button onClick={e => { e.stopPropagation(); if (confirm("Delete this map?")) onDelete(m.id); }} aria-label={`Delete ${m.label}`} style={{ position: "absolute", top: 12, right: 12, background: "none", border: "none", color: C.border, fontSize: 14, cursor: "pointer", padding: "4px 8px" }} onMouseEnter={e => e.target.style.color = "#e8443a"} onMouseLeave={e => e.target.style.color = C.border}>×</button>}
+    </div>
+  );
+}
+
+/* ── Main ── */
+export default function App() {
+  const [maps, setMaps] = useState([]); const [openMap, setOpenMap] = useState(null);
+  const [activeNode, setActiveNode] = useState(null); const [showTL, setShowTL] = useState(false);
+  const [showInsight, setShowInsight] = useState(false); const [busy, setBusy] = useState(false);
+  const [editMode, setEditMode] = useState(false); const [renaming, setRenaming] = useState(null);
+  const [panel, setPanel] = useState(null); const [showExamples, setShowExamples] = useState(true);
+  const [reducedMotion, setReducedMotion] = useState(false);
+  const [showWhy, setShowWhy] = useState(false); // "why is this here?" toggle
+
+  useEffect(() => { store.load().then(setMaps); }, []);
+  useEffect(() => { if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) setReducedMotion(true); }, []);
+
+  const m = openMap?.map;
+  const conIds = m ? (m.connections || []).filter(([a, b]) => a === activeNode || b === activeNode).map(([a, b]) => a === activeNode ? b : a) : [];
+  const selNode = m && activeNode ? m.nodes.find(n => n.id === activeNode) : null;
+  const conNodes = conIds.map(id => m?.nodes.find(n => n.id === id)).filter(Boolean);
+  const anim = reducedMotion ? "none" : "fadeIn 0.4s ease both";
+  const togglePanel = (p) => setPanel(prev => prev === p ? null : p);
+
+  const onNew = async (txt, extraChunks) => {
+    setBusy(true);
+    try {
+      const p = await callAI(SYS, `Analyze this text and extract cognitive/emotional patterns:\n\n${txt.slice(0, 14000)}`);
+      const nm = { id: "map-" + Date.now(), label: p.title || "Untitled", subtitle: p.subtitle || "", description: p.description || "Click any tag.", nodes: mkNodes(p), connections: p.connections || [], insight: p.insight, sources: [`Added ${new Date().toLocaleDateString()}`], createdAt: Date.now() };
+      await store.save(nm);
+      if (extraChunks?.length) {
+        let current = nm;
+        for (let i = 0; i < extraChunks.length; i++) {
+          try {
+            const desc = JSON.stringify({ nodes: current.nodes.map(n => ({ id: n.id, label: n.label, color: n.color, sessions: n.sessions })), connections: current.connections });
+            const mp = await callAI(MERGE_SYS, `EXISTING MAP:\n${desc}\n\nNEW TEXT:\n${extraChunks[i].slice(0, 13000)}`);
+            current = { ...current, nodes: mkNodes(mp), connections: mp.connections || current.connections, insight: mp.insight || current.insight, changelog: mp.changelog };
+            await store.save(current);
+          } catch {}
+        }
+        Object.assign(nm, { nodes: current.nodes, connections: current.connections, insight: current.insight, changelog: current.changelog });
+      }
+      setMaps(await store.load()); setOpenMap({ map: nm, isDemo: false }); setActiveNode(null); setPanel(null);
+    } finally { setBusy(false); }
+  };
+
+  const onAdd = async (mapId, txt) => {
+    setBusy(true);
+    try {
+      const ex = maps.find(x => x.id === mapId); if (!ex) throw new Error("Map not found");
+      const chunks = chunkText(txt); let current = ex;
+      for (const chunk of chunks) {
+        const desc = JSON.stringify({ nodes: current.nodes.map(n => ({ id: n.id, label: n.label, color: n.color, sessions: n.sessions })), connections: current.connections });
+        const p = await callAI(MERGE_SYS, `EXISTING MAP:\n${desc}\n\nNEW TEXT:\n${chunk.slice(0, 13000)}`);
+        current = { ...current, nodes: mkNodes(p), connections: p.connections || current.connections, insight: p.insight || current.insight, changelog: p.changelog, description: p.description || current.description, sources: [...(current.sources || []), `Added ${new Date().toLocaleDateString()}`] };
+      }
+      await store.save(current); setMaps(await store.load()); setOpenMap({ map: current, isDemo: false }); setActiveNode(null); setPanel(null);
+    } finally { setBusy(false); }
+  };
+
+  const onCombine = async (otherId) => {
+    setBusy(true);
+    try {
+      const mapA = openMap?.map, mapB = maps.find(x => x.id === otherId);
+      if (!mapA || !mapB) throw new Error("Map not found");
+      const offset = Math.max(...mapA.nodes.map(n => n.id), 0) + 1;
+      const dA = JSON.stringify({ nodes: mapA.nodes.map(n => ({ id: n.id, label: n.label, color: n.color, sessions: n.sessions })), connections: mapA.connections });
+      const dB = JSON.stringify({ nodes: mapB.nodes.map(n => ({ id: n.id + offset, label: n.label, color: n.color, sessions: n.sessions })), connections: mapB.connections.map(([a, b]) => [a + offset, b + offset]) });
+      const p = await callAI(COMBINE_SYS, `MAP A ("${mapA.label}"):\n${dA}\n\nMAP B ("${mapB.label}"):\n${dB}`);
+      const combined = { id: "map-" + Date.now(), label: p.title || `${mapA.label} + ${mapB.label}`, subtitle: p.subtitle || "combined", description: p.description || "Click any tag.", nodes: mkNodes(p), connections: p.connections || [], insight: p.insight, changelog: p.changelog, sources: [...(mapA.sources || []), ...(mapB.sources || []), "Combined " + new Date().toLocaleDateString()], createdAt: Date.now() };
+      await store.save(combined); setMaps(await store.load()); setOpenMap({ map: combined, isDemo: false }); setActiveNode(null); setPanel(null);
+    } finally { setBusy(false); }
+  };
+
+  const onDel = async (id) => { await store.remove(id); setMaps(await store.load()); if (openMap?.map?.id === id) setOpenMap(null); };
+  const onMove = useCallback((nid, x, y) => { setOpenMap(prev => prev && !prev.isDemo ? { ...prev, map: { ...prev.map, nodes: prev.map.nodes.map(n => n.id === nid ? { ...n, x, y } : n) } } : prev); }, []);
+  const onRename = useCallback((nid, label) => {
+    setOpenMap(prev => { if (!prev || prev.isDemo) return prev; const u = { ...prev.map, nodes: prev.map.nodes.map(n => n.id === nid ? { ...n, label } : n) }; store.save(u); return { ...prev, map: u }; });
+    setMaps(prev => prev.map(mm => mm.id === openMap?.map?.id ? { ...mm, nodes: mm.nodes.map(n => n.id === nid ? { ...n, label } : n) } : mm));
+    setRenaming(null);
+  }, [openMap]);
+  const onDelNode = useCallback((nid) => {
+    setOpenMap(prev => { if (!prev || prev.isDemo) return prev; const u = { ...prev.map, nodes: prev.map.nodes.filter(n => n.id !== nid), connections: prev.map.connections.filter(([a, b]) => a !== nid && b !== nid) }; store.save(u); return { ...prev, map: u }; });
+    setActiveNode(null);
+  }, []);
+  const saveLayout = async () => { if (openMap?.map) { await store.save(openMap.map); setMaps(await store.load()); } setEditMode(false); };
+  const goHome = () => { setOpenMap(null); setActiveNode(null); setEditMode(false); setPanel(null); setShowTL(false); setShowWhy(false); };
+  const viewMap = (map, isDemo = false) => { setOpenMap({ map, isDemo }); setActiveNode(null); setShowTL(false); setShowInsight(false); setEditMode(false); setPanel(null); setShowWhy(false); };
+
+  // Shift legend items
+  const hasShifts = m?.nodes.some(n => n.shift && n.shift !== "stable");
+
+  return (
+    <div style={{ minHeight: "100vh", background: C.bg, fontFamily: "'DM Sans',sans-serif", color: C.text }}>
+      <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=DM+Sans:wght@400;500;600;700&family=Source+Serif+4:ital,wght@0,400;0,500;0,600;1,400&display=swap" rel="stylesheet" />
+      <style>{`@keyframes fadeIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}} ::selection{background:#FFE060;color:#1a1615} textarea::placeholder{color:#bbb} *:focus-visible{outline:2px solid ${C.accent};outline-offset:2px;border-radius:4px}`}</style>
+
+      <div style={{ height: 3, background: `linear-gradient(90deg, ${RAINBOW.join(", ")})` }} />
+      <header style={{ padding: "20px 28px", display: "flex", alignItems: "center", justifyContent: "space-between", maxWidth: 900, margin: "0 auto", flexWrap: "wrap", gap: 10 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer" }} onClick={goHome} role="button" tabIndex={0} onKeyDown={e => e.key === "Enter" && goHome()}>
+          <div style={{ display: "flex", gap: 3 }}>{RAINBOW.slice(0, 4).map((c, i) => <div key={i} style={{ width: 8, height: 8, borderRadius: "50%", background: c }} />)}</div>
+          <h1 style={{ fontFamily: "'DM Serif Display',serif", fontSize: 24, margin: 0, letterSpacing: "-0.3px" }}>Neural Shelf</h1>
+          <span style={{ fontSize: 10, color: C.accent, fontWeight: 500, letterSpacing: "0.05em", textTransform: "uppercase", border: `1px solid ${C.accent}40`, borderRadius: 10, padding: "2px 8px" }}>indexing studio</span>
+        </div>
+        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+          <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 10, color: C.muted, cursor: "pointer" }}>
+            <input type="checkbox" checked={reducedMotion} onChange={e => setReducedMotion(e.target.checked)} style={{ width: 14, height: 14 }} />reduce motion
+          </label>
+          {openMap && <Pill onClick={goHome}>← library</Pill>}
+        </div>
+      </header>
+
+      <div style={{ maxWidth: 900, margin: "0 auto", padding: "0 28px 60px" }}>
+        {!openMap && (
+          <div style={{ animation: anim }}>
+            <h2 style={{ fontFamily: "'DM Serif Display',serif", fontSize: 22, fontWeight: 400, margin: "0 0 4px" }}>Your Maps</h2>
+            <p style={{ fontSize: 13, color: C.muted, margin: "0 0 20px", fontStyle: "italic", fontFamily: "'Source Serif 4',Georgia,serif" }}>
+              {maps.length === 0 ? "No maps yet. Paste some text below to create your first one." : `${maps.length} map${maps.length !== 1 ? "s" : ""}. Click to explore, or add new content below.`}
+            </p>
+            {maps.length > 0 && <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(260px,1fr))", gap: 14, marginBottom: 24 }}>{maps.map(mm => <MapCard key={mm.id} m={mm} onClick={() => viewMap(mm)} onDelete={onDel} />)}</div>}
+            <div style={{ marginBottom: 24 }}><InputPanel onNew={onNew} onAdd={onAdd} targets={maps} busy={busy} /></div>
+            <button onClick={() => setShowExamples(s => !s)} style={{ background: "none", border: `1px dashed ${C.border}`, borderRadius: 14, padding: "12px 20px", cursor: "pointer", color: C.muted, fontSize: 12, fontFamily: "'Source Serif 4',Georgia,serif", fontStyle: "italic", width: "100%", textAlign: "left" }}>
+              {showExamples ? "Hide examples ↑" : "See example maps → three demos showing progression over time"}</button>
+            {showExamples && <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(260px,1fr))", gap: 14, marginTop: 14, animation: anim }}>{DEMOS.map(d => <MapCard key={d.id} m={d} onClick={() => viewMap(d, true)} />)}</div>}
+          </div>
+        )}
+
+        {openMap && m && (
+          <div style={{ animation: anim }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 8, marginBottom: 14 }}>
+              <div><h2 style={{ fontFamily: "'DM Serif Display',serif", fontSize: 20, fontWeight: 400, margin: "0 0 2px" }}>{m.label}</h2><div style={{ fontSize: 11, color: C.muted }}>{m.subtitle}</div></div>
+              <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
+                {activeNode && <Pill onClick={() => { setActiveNode(null); setShowWhy(false); }}>clear ×</Pill>}
+                {!openMap.isDemo && <Pill active={editMode} onClick={() => editMode ? saveLayout() : setEditMode(true)}>{editMode ? "save layout" : "edit"}</Pill>}
+                {!openMap.isDemo && <Pill active={panel === "input"} onClick={() => togglePanel("input")}>+ add</Pill>}
+                {!openMap.isDemo && <Pill active={panel === "combine"} onClick={() => togglePanel("combine")}>combine</Pill>}
+                <Pill active={panel === "structure"} onClick={() => togglePanel("structure")}>structure</Pill>
+                <Pill active={panel === "export"} onClick={() => togglePanel("export")}>export</Pill>
+                {m.timeline && <Pill active={showTL} onClick={() => setShowTL(s => !s)}>timeline</Pill>}
+              </div>
+            </div>
+            <p style={{ fontSize: 12, color: C.muted, fontStyle: "italic", lineHeight: 1.6, margin: "0 0 14px", fontFamily: "'Source Serif 4',Georgia,serif" }}>{m.description}</p>
+            {m.changelog && <div style={{ fontSize: 11, color: RAINBOW[3], background: "#D4F5E920", border: "1px solid #D4F5E960", borderRadius: 10, padding: "8px 14px", marginBottom: 14 }}>↳ {m.changelog}</div>}
+
+            <div style={{ marginBottom: 14 }}>
+              <Canvas map={m} activeNode={activeNode} setActiveNode={n => { setActiveNode(n); setShowWhy(false); }} editable={editMode && !openMap.isDemo} onMove={onMove} reducedMotion={reducedMotion} />
+              {editMode && <div style={{ fontSize: 10, color: C.muted, marginTop: 6, fontStyle: "italic" }}>Drag tags to rearrange (works on touch too). Click to rename or remove.</div>}
+            </div>
+
+            {showTL && m.timeline && (
+              <div style={{ background: C.surface, borderRadius: 12, border: `1px solid ${C.border}`, padding: "14px 18px", marginBottom: 14, display: "flex", overflowX: "auto" }}>
+                {m.timeline.map((s, i) => (<div key={i} style={{ display: "flex", alignItems: "center", flex: 1, minWidth: 90 }}><div style={{ textAlign: "center", flex: 1 }}><div style={{ width: 10, height: 10, borderRadius: "50%", background: s.color, margin: "0 auto 5px", border: "2px solid white", boxShadow: `0 0 6px ${s.color}` }} /><div style={{ fontSize: 9, color: C.text, fontWeight: 600 }}>{s.date}</div><div style={{ fontSize: 9, color: C.muted, fontStyle: "italic" }}>{s.label}</div></div>{i < m.timeline.length - 1 && <div style={{ height: 1, background: C.border, flex: 0.3, alignSelf: "flex-start", marginTop: 5 }} />}</div>))}
+              </div>
+            )}
+
+            {panel === "input" && !openMap.isDemo && <div style={{ marginBottom: 14 }}><InputPanel onNew={onNew} onAdd={onAdd} targets={maps} busy={busy} /></div>}
+            {panel === "combine" && !openMap.isDemo && <CombinePanel maps={maps} currentMapId={m.id} onCombine={onCombine} onClose={() => setPanel(null)} busy={busy} />}
+            {panel === "structure" && <StructurePanel map={m} onClose={() => setPanel(null)} />}
+            {panel === "export" && <ExportPanel map={m} onClose={() => setPanel(null)} />}
+
+            {/* Selected node detail — now with "why is this here?" */}
+            {selNode && (
+              <div style={{ background: C.surface, borderRadius: 12, border: `1px solid ${C.border}`, padding: "18px 22px", marginBottom: 14, borderLeft: `3px solid ${tc(selNode.color).border}` }}>
+                <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 14, flexWrap: "wrap" }}>
+                  <div>
+                    <div style={{ fontSize: 9, letterSpacing: "0.12em", textTransform: "uppercase", color: C.muted, marginBottom: 6 }}>selected pattern</div>
+                    {renaming === selNode.id ? (
+                      <input autoFocus defaultValue={selNode.label} aria-label="Rename pattern"
+                        onBlur={e => onRename(selNode.id, e.target.value)} onKeyDown={e => e.key === "Enter" && onRename(selNode.id, e.target.value)}
+                        style={{ fontFamily: "'Source Serif 4',Georgia,serif", fontSize: 14, border: `1.5px solid ${C.accent}`, borderRadius: 18, padding: "6px 14px", outline: "none", background: C.warm }} />
+                    ) : (
+                      <span onClick={() => !openMap.isDemo && setRenaming(selNode.id)} role={openMap.isDemo ? undefined : "button"} tabIndex={openMap.isDemo ? undefined : 0}
+                        style={{ background: tc(selNode.color).bg, border: `1.5px solid ${tc(selNode.color).border}`, borderRadius: 18, padding: "6px 14px", fontSize: 14, color: tc(selNode.color).text, display: "inline-block", marginBottom: 8, cursor: openMap.isDemo ? "default" : "text" }}>
+                        {selNode.userAdded && <span style={{ marginRight: 6, opacity: 0.7 }}>✦</span>}{selNode.label}
+                      </span>
+                    )}
+                    <div style={{ fontSize: 11, color: C.muted }}>
+                      appeared in <strong style={{ color: C.text }}>{selNode.sessions}</strong> session{selNode.sessions !== 1 ? "s" : ""}
+                      {selNode.userAdded && <span style={{ marginLeft: 8, color: C.tags.peach.text, fontStyle: "italic" }}>· you added this</span>}
+                      {selNode.shift === "new" && <span style={{ marginLeft: 8, color: RAINBOW[3], fontWeight: 500 }}>· new</span>}
+                      {selNode.shift === "strengthened" && <span style={{ marginLeft: 8, color: RAINBOW[4], fontWeight: 500 }}>· strengthened</span>}
+                      {selNode.shift === "faded" && <span style={{ marginLeft: 8, color: C.muted, fontStyle: "italic" }}>· fading</span>}
+                    </div>
+
+                    {/* Why is this here? */}
+                    {selNode.source_snippets?.length > 0 && (
+                      <div style={{ marginTop: 8 }}>
+                        <button onClick={() => setShowWhy(s => !s)} style={{ fontSize: 10, color: C.accent, background: "none", border: `1px solid ${C.accent}40`, borderRadius: 10, padding: "3px 10px", cursor: "pointer" }}>
+                          {showWhy ? "hide source" : "why is this here?"}
+                        </button>
+                        {showWhy && (
+                          <div style={{ marginTop: 8, padding: "10px 14px", borderRadius: 10, background: C.warm, fontSize: 12, color: C.text, lineHeight: 1.6, fontFamily: "'Source Serif 4',Georgia,serif" }}>
+                            <div style={{ fontSize: 9, letterSpacing: "0.1em", textTransform: "uppercase", color: C.muted, marginBottom: 6 }}>anchored by these phrases from your text</div>
+                            {selNode.source_snippets.map((s, i) => (
+                              <div key={i} style={{ marginBottom: 4, paddingLeft: 10, borderLeft: `2px solid ${tc(selNode.color).border}`, fontStyle: "italic", color: C.muted }}>"{s}"</div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {!openMap.isDemo && editMode && (
+                      <div style={{ marginTop: 8, display: "flex", gap: 6 }}>
+                        <button onClick={() => setRenaming(selNode.id)} style={{ fontSize: 10, color: C.accent, background: "none", border: `1px solid ${C.accent}40`, borderRadius: 10, padding: "3px 10px", cursor: "pointer" }}>rename</button>
+                        <button onClick={() => onDelNode(selNode.id)} style={{ fontSize: 10, color: "#e8443a", background: "none", border: "1px solid #e8443a40", borderRadius: 10, padding: "3px 10px", cursor: "pointer" }}>remove</button>
+                      </div>
+                    )}
+                  </div>
+                  {conNodes.length > 0 && (
+                    <div><div style={{ fontSize: 9, letterSpacing: "0.12em", textTransform: "uppercase", color: C.muted, marginBottom: 6 }}>connects to</div>
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+                        {conNodes.map(cn => (<span key={cn.id} onClick={() => { setActiveNode(cn.id); setShowWhy(false); }} role="button" tabIndex={0} onKeyDown={e => e.key === "Enter" && setActiveNode(cn.id)}
+                          style={{ background: tc(cn.color).bg, border: `1.5px solid ${tc(cn.color).border}`, borderRadius: 12, padding: "3px 10px", fontSize: 11, color: tc(cn.color).text, cursor: "pointer" }}>{cn.label}</span>))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {m.insight && (
+              <div style={{ marginBottom: 14 }}>
+                <Pill active={showInsight} onClick={() => setShowInsight(s => !s)}>{showInsight ? "hide insight" : "show AI insight"}</Pill>
+                {showInsight && <div style={{ marginTop: 10, padding: "14px 18px", borderRadius: 12, background: C.surface, border: `1px solid ${C.border}`, borderLeft: `3px solid ${RAINBOW[4]}`, fontSize: 13, color: C.text, lineHeight: 1.7, fontStyle: "italic", fontFamily: "'Source Serif 4',Georgia,serif" }}>{m.insight}</div>}
+              </div>
+            )}
+            {m.sources?.length > 0 && <div style={{ fontSize: 10, color: C.muted, marginBottom: 14 }}>Sources: {m.sources.join(" · ")}</div>}
+
+            {/* Legend — includes shift indicators when present */}
+            <div style={{ display: "flex", gap: 14, flexWrap: "wrap", fontSize: 10, color: C.muted }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 5 }}><div style={{ width: 20, height: 12, borderRadius: 6, background: "#D4F5E9", border: "1px solid #90E0BF" }} />color = cluster</div>
+              <div style={{ display: "flex", alignItems: "center", gap: 5 }}><div style={{ display: "flex", alignItems: "flex-end", gap: 1 }}>{[5, 7, 9].map((s, i) => <div key={i} style={{ width: s, height: s, borderRadius: "50%", background: "#C4AAFF" }} />)}</div>frequency</div>
+              <div style={{ display: "flex", alignItems: "center", gap: 5 }}><svg width="20" height="7"><line x1="0" y1="3.5" x2="20" y2="3.5" stroke="#D0C8BC" strokeWidth="1" strokeDasharray="3 3" /></svg>connection</div>
+              <div style={{ display: "flex", alignItems: "center", gap: 5 }}><span>✦</span> user-added</div>
+              {hasShifts && <>
+                <div style={{ display: "flex", alignItems: "center", gap: 5 }}><div style={{ width: 6, height: 6, borderRadius: "50%", background: RAINBOW[3] }} />new</div>
+                <div style={{ display: "flex", alignItems: "center", gap: 5 }}><div style={{ width: 14, height: 10, borderRadius: 5, border: "1px dashed #C4AAFF" }} />strengthened</div>
+                <div style={{ display: "flex", alignItems: "center", gap: 5 }}><div style={{ width: 14, height: 10, borderRadius: 5, background: "#EAE0FF", opacity: 0.4 }} />fading</div>
+              </>}
+            </div>
+          </div>
+        )}
+
+        <div style={{ marginTop: 40, paddingTop: 16, borderTop: `1px solid ${C.border}`, fontSize: 10, color: C.muted, textAlign: "center", lineHeight: 1.6, fontFamily: "'Source Serif 4',Georgia,serif", fontStyle: "italic" }}>
+          Neural Shelf Indexing Studio · Patterns are suggestions, not diagnoses. Your map is yours to name.
+          <br />Shared storage is on — collaborators see the same maps.
+        </div>
+      </div>
+    </div>
+  );
+}
